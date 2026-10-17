@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stremio Lite</title><link rel="stylesheet" href="style.css">
+<script src="$WEBAPIS/webapis/webapis.js"></script>
+</head><body>
+<div id="shell"><header><div class="brand">Stremio <span>Lite</span></div><nav id="nav"></nav></header>
+<main id="view"></main><footer><span id="status" role="status">Starting…</span><span>Arrows · Select · Return</span></footer></div>
+<section id="player" class="hidden" aria-label="Video player">
+<object id="av-player" type="application/avplayer"></object><video id="video" playsinline></video>
+<div id="subtitle"></div><div id="player-bar"><strong id="playing-title"></strong><span id="time"></span>
+<div id="player-controls"><button id="pause">Pause / play</button><button id="rewind">−30 sec</button><button id="forward">+30 sec</button><button id="tracks">Subtitles / audio</button><button id="stop">Stop</button></div><p id="playback-status" role="status"></p></div>
+<div id="track-menu" class="hidden"></div></section>
+<script src="core.js"></script><script src="app.js"></script></body></html>
