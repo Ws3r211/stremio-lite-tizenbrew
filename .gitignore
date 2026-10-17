@@ -4,3 +4,4 @@ dist/
 *.log
 tools/
 design-qa.md
+.auto-cache/

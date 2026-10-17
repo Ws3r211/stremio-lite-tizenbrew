@@ -1,14 +1,17 @@
 {
   "name": "stremio-lite-tizenbrew",
-  "version": "3.0.1",
+  "version": "3.1.0",
   "private": true,
   "description": "Unofficial Stremio-compatible client for older Samsung TVs. ES5 client targeting Tizen 3.0.",
   "license": "MIT",
-  "repository": {"type": "git", "url": "https://github.com/Ws3r211/stremio-lite-tizenbrew.git"},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ws3r211/stremio-lite-tizenbrew.git"
+  },
   "packageType": "app",
-  "appName": "Stremio Lite",
-  "appPath": "app/index.html",
-  "serviceFile": "service.js",
+  "appName": "Stremio Lite Auto",
+  "appPath": "auto/loader.html",
+  "serviceFile": "auto/service.js",
   "keys": [
     "MediaPlayPause",
     "MediaPlay",
@@ -25,7 +28,10 @@
     "app",
     "service.js",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "auto",
+    "runtime.json",
+    "update.json"
   ],
   "devDependencies": {
     "acorn": "^8.15.0"

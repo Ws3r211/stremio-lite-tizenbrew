@@ -2,6 +2,18 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 3.1.0: install once, update on launch
+
+Add `Ws3r211/stremio-lite-tizenbrew@v3.1.0` once in TizenBrew and fully restart the TV to replace its cached service. Launch **Stremio Lite Auto** and keep this entry for future releases. The module version remains the permanent launcher's version; Settings shows the installed app/service version. Your Developer Mode IP stays unchanged. The TV fetches updates itself; no PC or scheduled task is needed.
+
+The permanent ES5/Node 4 launcher checks this repository's public `update.json` on each opening and downloads the complete `runtime.json` from its fixed release tag. It verifies the SHA-256 digest, version, required files and script syntax before activation. The app and service switch together on launch; **Check for updates** in Settings only stages an update until you reopen. Nothing polls for or applies updates during video playback. Your account, addons, Home settings and progress remain in the original browser origin's storage. Update checks send no account or configured addon data.
+
+The bundled app works if an update check fails. Complete verified updates are cached under `/home/owner/share/stremio-lite-auto` on the TV using an atomic state-file replacement; a previous version is retained. If the new app never confirms startup, the next opening restores the previous version and skips that failed release. Unavailable cache writes are shown in Settings; the bundled fallback remains available. This is app-level fallback, not an OS/firmware rollback. Transport certificate validation remains enabled. Updates are restricted to this project's repository, with no arbitrary download URL field.
+
+For release maintainers: bump the package, runtime-service and app versions; run `python build-auto.py` then the checks and `python build-release.py`. Publish the matching version tag and verify its CDN bundle **before** promoting `update.json` on main. The launcher in the original v3.1.0 entry stays unchanged. Keep the seven runtime file names and `/auto/ready/<digest>` startup acknowledgement compatible with bootstrap protocol 1. A future bootstrap-protocol change may need a one-time new launcher, while ordinary app/service fixes do not.
+
+Native TV validation of the automatic launcher is still required. Desktop tests cover the real launch document, preserved storage, coherent service/assets, update staging, invalid/interrupted downloads, offline fallback and unconfirmed-start rollback.
+
 ## Version 3.0.1: search clarity, episode dates and buffering recovery
 
 Search has Movies / TV shows / Videos / Live TV / Other filters where matching results exist. Every card identifies the content type; verified account-library matches get a separate In library badge. An addon's custom `library` type is labeled Library item and is not treated as proof of account membership. Duplicate IDs of the same type merge richer metadata; different IDs are retained. Missing/broken posters show a readable fallback, and search query/filter choices survive opening a title. Search refreshes library membership using the existing read-only account endpoint.
@@ -78,7 +90,7 @@ TizenBrew's current loader retrieves module files from jsDelivr using a **public
 
 1. Open TizenBrew on your TV.
 2. Open Module Manager and choose **Add GitHub Module**.
-3. Enter `Ws3r211/stremio-lite-tizenbrew@v3.0.1`. This fixed release reference avoids stale `main` caches.
+3. Enter `Ws3r211/stremio-lite-tizenbrew@v3.1.0`. This fixed release reference avoids stale `main` caches.
 4. Launch **Stremio Lite**.
 5. Check Settings. It should report that the local service is connected. Run **Play test video** and verify picture, sound, pause, seek, and Return.
 6. Select **Sign in with Stremio**, open the displayed link on your phone, and approve the device. The client then imports your existing addons.
