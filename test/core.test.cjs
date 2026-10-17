@@ -43,6 +43,15 @@ test('streams needing another transport or headers have actionable errors', () =
     assert.equal(C.playable({url:'javascript:alert(1)'}).ok,false);
     assert.equal(C.playable({url:'https://example.com',behaviorHints:{proxyHeaders:{request:{Authorization:'secret'}}}}).ok,false);
 });
+test('content labels, metadata merging and release dates preserve identity and uncertainty',()=>{
+    assert.equal(C.typeLabel('series'),'TV show');assert.equal(C.typeLabel('tv'),'Live TV');assert.equal(C.typeLabel('library'),'Library item');
+    const partial={id:'x',type:'series',name:'Show'},full={id:'x',type:'series',name:'Show',poster:'https://example.com/poster.jpg',year:'2024'};
+    const merged=C.uniqueMetas([partial,full,{id:'y',type:'series',name:'Show'},{id:'x',type:'movie',name:'Show'}]);
+    assert.equal(merged.length,3);assert.equal(merged[0].poster,full.poster);assert.equal(partial.poster,undefined);
+    assert.equal(C.releaseDetails('2026-10-16T22:00:00Z',Date.UTC(2026,9,17)).label,'Released · 16 Oct 2026');
+    assert.equal(C.releaseDetails('2026-10-18',Date.UTC(2026,9,17)).upcoming,true);
+    for(const value of [undefined,'not a date','2026-02-30'])assert.equal(C.releaseDetails(value).label,'Release date not provided');
+});
 test('episode order, duplicate IDs, and subtitle timestamps use protocol values', () => {
     assert.deepEqual(C.sortVideos([{season:2,episode:1},{season:1,episode:2},{season:1,episode:1}]).map(x=>x.season+':'+x.episode),['1:1','1:2','2:1']);
     assert.equal(C.uniqueMetas([{id:'x',type:'movie',name:'a'},{id:'x',type:'movie',name:'a'},{id:'x',type:'series',name:'a'}]).length,2);

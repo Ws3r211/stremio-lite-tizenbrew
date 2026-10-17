@@ -1,0 +1,62 @@
+/* Synthetic catalog and account fixtures; no real account or configured addon URL. */
+const assert=require('node:assert/strict'),path=require('node:path');
+const {chromium}=require('playwright'),createServer=require('../service.js');
+(async()=>{
+ const server=createServer({staticDir:path.join(__dirname,'../app')});await new Promise(r=>server.listen(17780,'127.0.0.1',r));
+ const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH||undefined});
+ const addon={transportUrl:'https://catalog.example/manifest.json',manifest:{id:'fixture',name:'Metadata fixture',types:['movie','series','library','video'],resources:['catalog','meta'],catalogs:[{id:'empty',name:'Empty shelf',type:'series'},{id:'shows',name:'Shows',type:'series',extra:[{name:'search'}]},{id:'movies',name:'Movies',type:'movie',extra:[{name:'search'}]}]}};
+ const context=await browser.newContext({viewport:{width:1920,height:1080}}),page=await context.newPage(),errors=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ await context.addInitScript(addon=>{localStorage.setItem('sl.addons',JSON.stringify([addon]));localStorage.setItem('sl.auth',JSON.stringify('synthetic-token'));},addon);
+ let allEmpty=false,failCatalog=false;
+ const series={id:'show',name:'South Park',type:'series',year:'1997',videos:[{id:'show:1:1',season:1,episode:1,title:'Pilot',released:'2020-01-02T00:00:00Z',overview:'A supplied episode overview.'},{id:'show:1:2',season:1,episode:2,title:'Future episode',released:'2099-01-03T00:00:00Z'},{id:'show:1:3',season:1,episode:3,title:'Unknown date'}]};
+ await page.route('**/broken.jpg',route=>route.abort());
+ await page.route('**/request',async route=>{
+  const {url}=route.request().postDataJSON();let data;
+  if(url.includes('/catalog/')&&failCatalog)return route.fulfill({status:400,json:{error:'Synthetic provider failure'}});
+  if(url.includes('/catalog/')&&allEmpty)data={metas:[]};
+  else if(url.includes('/datastoreGet'))data={result:[{_id:'show',type:'series',name:'South Park'},{_id:'removed',type:'movie',name:'Removed title',removed:true}]};
+  else if(url.includes('/meta/'))data={meta:series};
+  else if(url.includes('/empty'))data={metas:[]};
+  else if(url.includes('/catalog/movie/'))data={metas:[{id:'show',name:'South Park',type:'series',poster:'https://images.example/broken.jpg',year:'1997'},{id:'movie',name:'South Park: The Movie',type:'movie',year:'1999'},{id:'custom',name:'South Park release filename',type:'library'},{id:'clip',name:'South Park clip',type:'video'},{id:'remake',name:'South Park',type:'movie',year:'2024'}]};
+  else data={metas:[series]};
+  await route.fulfill({json:{data}});
+ });
+ try{
+  await page.goto('http://127.0.0.1:17780/');
+  await page.getByRole('button',{name:/South Park.*TV show/}).first().waitFor();
+  assert.equal(await page.getByRole('region',{name:'Empty shelf',exact:true}).isVisible(),false);
+  assert.equal(await page.getByText('No titles in this catalog yet.',{exact:true}).count(),0);
+  assert(await page.getByRole('group',{name:'Content type'}).count() || await page.locator('.discover-filters').isVisible());
+  await page.getByRole('button',{name:'Search',exact:true}).first().click();
+  await page.getByRole('searchbox').fill('South Park');await page.getByRole('button',{name:'Search',exact:true}).last().click();
+  await page.locator('.search-summary').filter({hasText:'5 results'}).waitFor();
+  assert.equal(await page.locator('.grid .card').count(),5);
+  const show=page.locator('.grid .card').filter({has:page.locator('.media-kind',{hasText:'TV show'})});
+  assert.equal(await show.locator('.library-badge').textContent(),'In library');
+  assert.equal(await page.locator('.grid .library-badge').count(),1,'a custom library type is not account membership');
+  assert.equal(await show.locator('img').getAttribute('src'),'https://images.example/broken.jpg','richer duplicate artwork is retained');
+  await page.waitForFunction(()=>document.querySelector('.grid .card img').style.display==='none');
+  assert(await show.locator('.poster-fallback').isVisible());
+  assert.match(await show.locator('.poster-fallback').textContent(),/South Park/);
+  await page.getByRole('button',{name:'Movies (2)',exact:true}).click();assert.equal(await page.locator('.grid .card').count(),2);
+  await page.getByRole('button',{name:'TV shows (1)',exact:true}).click();
+  await show.click();await page.getByRole('button',{name:/^1\. Pilot/}).waitFor();
+  assert.match(await page.getByRole('button',{name:/^1\. Pilot/}).textContent(),/Released · 2 Jan 2020/);
+  assert.match(await page.getByRole('button',{name:/^2\. Future/}).textContent(),/Upcoming · 3 Jan 2099/);
+  assert.match(await page.getByRole('button',{name:/^3\. Unknown/}).textContent(),/Release date not provided/);
+  await page.screenshot({path:path.join(__dirname,'../artifacts/episodes-3.0.1.jpg')});
+  await page.getByRole('button',{name:'Back',exact:true}).click();await page.locator('.search-summary').filter({hasText:'TV shows'}).waitFor();
+  assert.equal(await page.getByRole('searchbox').inputValue(),'South Park');assert.equal(await page.locator('.grid .card').count(),1);
+  await page.getByRole('button',{name:'All (5)',exact:true}).click();await page.screenshot({path:path.join(__dirname,'../artifacts/search-3.0.1-fixture.jpg')});
+  await page.getByRole('button',{name:'Discover',exact:true}).click();assert.equal(await page.getByRole('region',{name:'Empty shelf',exact:true}).isVisible(),false);
+  allEmpty=true;await page.reload();await page.getByRole('button',{name:'Catalog settings',exact:true}).waitFor();
+  assert.equal(await page.locator('.catalog-row:visible').count(),0);
+  assert(await page.locator('.discover-filters').isVisible());
+  await page.getByRole('button',{name:'Search',exact:true}).first().click();await page.getByRole('button',{name:'Discover',exact:true}).click();
+  await page.getByRole('button',{name:'Catalog settings',exact:true}).waitFor();
+  failCatalog=true;await page.reload();await page.getByRole('button',{name:'Retry catalog',exact:true}).first().waitFor();
+  assert(await page.locator('.catalog-row:visible').count()>0,'network failures must not be hidden as empty catalogs');
+  assert.deepEqual(errors,[]);console.log('PASS: empty shelves/cache, enriched duplicates, type filters, verified library badge, broken poster fallback, retained search and episode release dates');
+ }finally{await context.close();await browser.close();await new Promise(r=>server.close(r));}
+})().catch(e=>{console.error(e);process.exitCode=1;});

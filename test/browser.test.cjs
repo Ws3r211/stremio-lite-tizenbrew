@@ -85,8 +85,8 @@ async function run(browser, existingServer) {
         await page.keyboard.press('Escape');assert(await page.locator('#player').isHidden());
         await page.getByRole('button',{name:'Discover',exact:true}).click();
         await page.getByRole('button',{name:'Fixture Series'}).first().click();
-        await page.getByRole('button',{name:'1. First',exact:true}).waitFor();
-        await page.getByRole('button',{name:'1. First',exact:true}).click();
+        await page.getByRole('button',{name:/^1\. First/}).waitFor();
+        await page.getByRole('button',{name:/^1\. First/}).click();
         await page.getByRole('button',{name:/HTTP fixture/}).waitFor();
         assert(calls.some(x=>x.url.includes('/stream/series/ttSERIES%3A1%3A1.json')));
         await page.getByRole('button',{name:'Settings',exact:true}).click();
