@@ -64,3 +64,15 @@ html.native-playing{background:transparent}#player-retry{pointer-events:auto;mar
 .grid{align-items:flex-start}
 
 @media(max-width:1400px){.search-view h1{font-size:32px;margin:4px 0 18px}.search-view .toolbar{margin-bottom:18px}.search-view .toolbar input,.search-view .toolbar button{font-size:20px;min-height:46px;padding:9px 14px}.search-filters{margin-bottom:6px}.search-filters button{font-size:18px;padding:8px 14px;min-height:44px}.search-summary{font-size:18px;margin-bottom:20px}.grid .card-artwork{height:190px}.grid .card .name{font-size:18px;height:46px;margin-top:10px}.grid .card-info{font-size:15px;min-height:24px;margin-top:5px}.grid .media-kind{font-size:14px;padding:2px 6px}.grid .card-source{font-size:14px;margin-top:5px}.grid .library-badge{font-size:13px;padding:5px 7px;right:7px;top:7px}.grid .fallback-title{font-size:19px}.grid .fallback-type,.grid .fallback-note{font-size:13px}.grid .card .poster-fallback{padding:14px}}
+
+/* Explicit fixed edges and flex layouts work in the 2017 Samsung browser. */
+.settings-view{padding-top:18px}.settings-content{margin-left:325px;max-width:1220px}
+.settings-sections{position:fixed;left:3.85%;top:210px;width:275px;z-index:3}
+.settings-sections button{display:block;width:100%;text-align:left;margin:0 0 12px;padding:16px 18px;background:transparent;color:#acbad2;font-size:24px}
+.settings-sections button.selected{background:#282442;color:#e1d5ff}.settings-sections button:focus{background:#554184;color:#fff}
+.settings-sections p{position:absolute;top:100%;left:0;right:0;font-size:17px;line-height:1.6;margin-top:24px}
+.settings-content .panel{margin-top:0;margin-bottom:30px;padding:25px 30px;overflow-wrap:break-word}
+.settings-content .panel h2{margin-top:0}.settings-content button{margin:0 12px 12px 0;max-width:100%;white-space:normal;text-align:left}
+.settings-content input.wide{width:100%}.settings-content form>button{margin-top:18px}.settings-content .catalog-setting-row button{margin:0}
+.settings-content .account-link{word-break:break-all}
+@media(max-width:1400px){.settings-view h1{font-size:34px;margin-bottom:22px}.settings-content{margin-left:265px;font-size:20px}.settings-sections{top:195px;width:225px}.settings-sections button{font-size:20px;padding:13px 15px}.settings-sections p{font-size:15px;margin-top:12px}.settings-content .panel{padding:22px}.settings-content h2{font-size:27px}.settings-content h3{font-size:22px}.settings-content button,.settings-content input,.settings-content select{font-size:20px;min-height:48px;padding:11px 15px}.settings-content .catalog-setting-label span{font-size:21px}.settings-content .catalog-setting-label small{font-size:17px}}
