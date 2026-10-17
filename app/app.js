@@ -583,6 +583,21 @@
     }
     function settings() {
         nav('Settings'); var mine = begin('Settings', settings);
+        if (window.StremioAuto) {
+            var updates = node('section', null, 'panel'); updates.appendChild(node('h2', 'Automatic updates')); view.appendChild(updates);
+            message('Updates are checked when you open this app. Your video is never interrupted. Keep this same TizenBrew module for future fixes.', false, updates);
+            var updateStatus = message('Installed version ' + window.StremioAuto.version, false, updates);
+            function showUpdate(data) {
+                if (epoch !== mine) return;
+                updateStatus.textContent = 'Installed ' + data.installed + (data.available ? ' · ' + data.available + ' ready for next launch' : ' · No update waiting') + (data.persistent === false ? ' · TV update cache unavailable; bundled fallback retained' : '') + (data.notice ? ' · ' + data.notice : '');
+            }
+            xhr('GET', SERVICE + '/auto/status', null, function (err, data) { if (!err) showUpdate(data); });
+            button('Check for updates', function () {
+                var b = this; b.disabled = true; updateStatus.textContent = 'Checking for updates…';
+                xhr('POST', SERVICE + '/auto/check', null, function (err, data) { if (epoch !== mine) return; b.disabled = false; if (err) updateStatus.textContent = 'Could not check for updates. Your installed version is kept.'; else showUpdate(data); }, false, {'X-Stremio-Auto': window.StremioAuto.token});
+            }, updates);
+            button('Reopen app', function () { window.location.reload(); }, updates);
+        }
         homeCatalogSettings();
         var accountBox = node('div', null, 'panel'); view.appendChild(accountBox);
         accountBox.appendChild(node('h2', 'Stremio account'));
@@ -629,8 +644,8 @@
             play({url: 'https://media.w3.org/2010/05/bunny/trailer.mp4'}, {type: 'movie', id: 'blender-bbb', name: 'Big Buck Bunny'}, 'blender-bbb', 'Big Buck Bunny · playback test');
         }, testBox);
         message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
-        if (session && serviceVersion !== '3.0.1') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
-        focusFirst(); status('Stremio Lite 3.0.1 · unofficial client for older TVs');
+        if (session && serviceVersion !== '3.1.0') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        focusFirst(); status('Stremio Lite 3.1.0 · unofficial client for older TVs');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
@@ -650,7 +665,7 @@
     function paintPause() {
         if (!playback) return;
         document.querySelector('#pause .button-label').textContent = playback.paused ? 'Play' : 'Pause';
-        document.querySelector('#pause use').setAttributeNS('http://www.w3.org/1999/xlink', 'href', 'player-icons.svg#player-' + (playback.paused ? 'play' : 'pause'));
+        document.querySelector('#pause use').setAttributeNS('http://www.w3.org/1999/xlink', 'href', (window.StremioAuto ? '#' : 'player-icons.svg#') + 'player-' + (playback.paused ? 'play' : 'pause'));
         document.getElementById('pause').setAttribute('aria-pressed', String(playback.paused));
     }
     function paintTimeline() {
@@ -1147,7 +1162,10 @@
     try { ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaRewind', 'MediaFastForward'].forEach(function (key) { tizen.tvinputdevice.registerKey(key); }); } catch (e) {}
     function start(attempt) {
         xhr('GET', SERVICE + '/health', null, function (err, data) {
-            if (!err && data && data.token) { session = data.token; serviceVersion = data.version || 'unknown'; }
+            if (!err && data && data.token) {
+                session = data.token; serviceVersion = data.version || 'unknown';
+                if (window.StremioAuto) xhr('POST', SERVICE + '/auto/ready/' + window.StremioAuto.digest, null, function () {}, false, {'X-Stremio-Auto': window.StremioAuto.token});
+            }
             else if (attempt < 3) return setTimeout(function () { start(attempt + 1); }, 600);
             home();
         });
