@@ -2,6 +2,12 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 0.1.1 catalog fix
+
+Fixes HTTP 502 on compressed catalogs with the TV's Node 4 runtime: that runtime can emit `aborted` for a complete HTTP response while gzip decoding is still finishing. The service now checks HTTP message completeness, still rejects genuinely truncated responses, and accepts gzip and deflate. Failed service GETs also try a direct browser request; account POSTs are not replayed. Catalog errors now show the provider and underlying failure, with a Retry button. Certificate validation remains enabled.
+
+After updating, fully restart the TV to replace TizenBrew's cached service. Settings should show **Stremio Lite 0.1.1** and **local TizenBrew service 0.1.1 connected**. Your stored account and addons are retained. A fixed commit reference in Module Manager avoids stale `@main` CDN files.
+
 The supplied firmware identifies Tizen 3.0. Samsung documents Chromium 47 for 2017 TVs. The current official Stremio web app uses a WebAssembly core, so opening that page in a wrapper does not address this browser generation. This client uses ES5 JavaScript, XMLHttpRequest, and compatible CSS without WebAssembly or a frontend framework.
 
 ## Features
@@ -19,7 +25,7 @@ The supplied firmware identifies Tizen 3.0. Samsung documents Chromium 47 for 20
 
 This client does not run a torrent engine. An addon must supply a direct HTTP(S) video URL. Torrent hashes, magnets, external website links, YouTube IDs, archives, DRM setup, and sources requiring custom HTTP headers are not implemented. Unsupported sources display an explanation instead of pretending to play.
 
-The TV must support the stream's codecs, container, resolution, TLS configuration, and delivery format. Desktop playback does not prove that a stream works on the TV. The client imports account data but does not upload library edits or watch progress. Genre filter selection, autoplay of the next episode, subtitle timing adjustment, and account-management actions are outside version 0.1.0.
+The TV must support the stream's codecs, container, resolution, TLS configuration, and delivery format. Desktop playback does not prove that a stream works on the TV. The client imports account data but does not upload library edits or watch progress. Genre filter selection, autoplay of the next episode, subtitle timing adjustment, and account-management actions are outside version 0.1.1.
 
 Only addon catalogs whose required filters can be supplied are shown. Addon manifest URLs must keep configuration in their path; URLs containing query parameters or fragments are rejected in this version. Legacy JSON-RPC addons are not supported.
 
@@ -59,11 +65,14 @@ The local JSON/subtitle service binds to `127.0.0.1:17780`. It permits its own o
 ```powershell
 npm ci --ignore-scripts
 node --test test/core.test.cjs
+node test/catalog-network.test.cjs
 ```
 
 The nine protocol/service tests cover ES5 syntax, encoded episode IDs and configuration paths, resource filters, required catalog extras, unsupported streams, subtitles, local-service origin/session checks, and the TizenBrew VM launch contract.
 
 Browser tests additionally need Playwright and an installed browser. `test/browser.test.cjs` uses synthetic account/addon data and a mocked AVPlay object. `test/live-smoke.cjs` explicitly accesses public Cinemeta metadata, requests an unauthenticated Stremio device code, and plays the public Blender sample on desktop. Neither test signs into a real account. Both can use `CHROME_PATH` to select an installed Chrome executable. Results in `artifacts/` distinguish desktop verification from physical-TV testing.
+
+`test/node4-smoke.js` runs with Node 4.4.3 and no npm dependencies. It tests compressed responses with connection closure, redirects, and rejected truncation; `--live` additionally fetches the public Cinemeta catalog. `test/catalog-network.test.cjs` checks browser fallback, configured catalog paths, diagnostic errors, retry, and account POST isolation with synthetic providers. A user's configured AIOMetadata instance still needs an on-TV check.
 
 ## Source assessment and references
 

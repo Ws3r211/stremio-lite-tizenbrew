@@ -15,12 +15,14 @@
             return !origin || origin === 'http://' + host || origin === 'http://127.0.0.1:8081';
         }
         function requestRemote(target, method, body, done, redirects) {
+            var callback = done, completed = false;
+            done = function (err, text) { if (!completed) { completed = true; callback(err, text); } };
             redirects = redirects || 0;
             var parsed;
             try { parsed = url.parse(target); } catch (e) { return done(new Error('Invalid URL')); }
             if ((parsed.protocol !== 'https:' && parsed.protocol !== 'http:') || !parsed.hostname || parsed.auth) return done(new Error('Only HTTP(S) URLs without embedded credentials are supported.'));
             if (method !== 'GET' && !(method === 'POST' && parsed.protocol === 'https:' && parsed.hostname === 'api.strem.io' && /^\/api\/(addonCollectionGet|datastoreGet)$/.test(parsed.pathname))) return done(new Error('Unsupported request method or API endpoint.'));
-            var headers = {'Accept': 'application/json, text/plain', 'Accept-Encoding': 'gzip', 'User-Agent': 'StremioLiteTizen/0.1.0'};
+            var headers = {'Accept': 'application/json, text/plain', 'Accept-Encoding': 'gzip, deflate', 'User-Agent': 'StremioLiteTizen/0.1.1'};
             if (body) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(body); }
             var request = (parsed.protocol === 'https:' ? https : http).request({hostname: parsed.hostname, port: parsed.port,
                 path: parsed.path, method: method, headers: headers}, function (response) {
@@ -32,6 +34,7 @@
                 }
                 var source = response;
                 if (response.headers['content-encoding'] === 'gzip') source = response.pipe(zlib.createGunzip());
+                else if (response.headers['content-encoding'] === 'deflate') source = response.pipe(zlib.createInflate());
                 var chunks = [], length = 0, finished = false;
                 function fail(e) { if (!finished) { finished = true; done(e); } }
                 source.on('data', function (chunk) {
@@ -39,16 +42,22 @@
                     if (length > 8 * 1024 * 1024) { request.abort(); fail(new Error('Response exceeds 8 MB')); return; }
                     chunks.push(chunk);
                 });
-                source.on('error', fail);
-                response.on('aborted', function () { fail(new Error('Upstream connection interrupted')); });
+                source.on('error', function () { fail(new Error('Could not decode the addon response.')); });
+                response.on('error', function () { fail(new Error('Upstream connection interrupted')); });
+                // Node 4 can emit aborted with complete=true on a normal Connection: close.
+                // Gunzip may still be draining then; only reject an incomplete HTTP message.
+                response.on('aborted', function () { if (!response.complete) fail(new Error('Upstream connection interrupted')); });
                 source.on('end', function () {
                     if (finished) return; finished = true;
                     if (response.statusCode < 200 || response.statusCode >= 300) return done(new Error('Upstream HTTP ' + response.statusCode));
                     done(null, Buffer.concat(chunks).toString('utf8'));
                 });
             });
-            request.setTimeout(25000, function () { request.abort(); });
-            request.on('error', function () { done(new Error('Network request failed or timed out.')); });
+            request.setTimeout(25000, function () { done(new Error('Addon request timed out.')); request.abort(); });
+            request.on('error', function (e) {
+                var code = /^[A-Z][A-Z0-9_]{1,60}$/.test(e.code || '') ? ' (' + e.code + ')' : '';
+                done(new Error('Network or certificate request failed' + code + '.'));
+            });
             if (body) request.write(body);
             request.end();
         }
@@ -60,7 +69,7 @@
             res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Stremio-Lite');
             res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
             if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
-            if (req.url === '/health' && req.method === 'GET') return json(res, 200, {name: 'Stremio Lite', version: '0.1.0', token: token});
+            if (req.url === '/health' && req.method === 'GET') return json(res, 200, {name: 'Stremio Lite', version: '0.1.1', token: token});
             if (req.url === '/request' && req.method === 'POST') {
                 if (req.headers['x-stremio-lite'] !== token) return json(res, 403, {error: 'Session token required'});
                 var chunks = [], length = 0, tooLarge = false;

@@ -8,7 +8,7 @@ out.mkdir(exist_ok=True)
 files = [root / x for x in ['package.json', 'package-lock.json', 'README.md', 'LICENSE', '.gitignore', 'service.js', 'build-release.py']]
 for directory in ['app', 'test']:
     files.extend(p for p in (root / directory).rglob('*') if p.is_file())
-archive = out / 'stremio-lite-tizenbrew-0.1.0-source.zip'
+archive = out / 'stremio-lite-tizenbrew-0.1.1-source.zip'
 manifest = []
 with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
     for p in sorted(files):

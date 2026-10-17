@@ -1,6 +1,6 @@
 {
   "name": "stremio-lite-tizenbrew",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Unofficial Stremio-compatible client for older Samsung TVs. Hardware validation pending.",
   "license": "MIT",
