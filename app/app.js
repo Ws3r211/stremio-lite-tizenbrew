@@ -8,7 +8,7 @@
         id: 'com.linvo.cinemeta', name: 'Cinemeta', types: ['movie', 'series'], resources: ['catalog', 'meta'],
         catalogs: [{id: 'top', type: 'movie', name: 'Movies', extra: [{name: 'search'}, {name: 'skip'}]}, {id: 'top', type: 'series', name: 'Series', extra: [{name: 'search'}, {name: 'skip'}]}]
     }};
-    var session = null, serviceVersion = '', epoch = 0, currentPage = null, previous = [], linkTimer = null;
+    var session = null, serviceVersion = '', epoch = 0, currentPage = null, previous = [], linkTimer = null, linkSerial = 0;
     var playback = null, playbackEpoch = 0, cues = [], barTimer = null, subtitleTimer = null;
     var catalogCache = {}, heroCache = {}, discoverState = {type: 'all', row: 0, card: 0}, discoverTick = null;
     var homeScroll = null, heroTimer = null;
@@ -89,7 +89,7 @@
             cb(null, response.result);
         });
     }
-    function cancelLink() { if (linkTimer) clearTimeout(linkTimer); linkTimer = null; }
+    function cancelLink() { linkSerial++; if (linkTimer) clearTimeout(linkTimer); linkTimer = null; }
     function begin(title, page, remember) {
         cancelLink();
         homeScroll = null; clearTimeout(discoverTick); clearTimeout(heroTimer);
@@ -327,7 +327,7 @@
         if (!choices.length) {
             filters.className += ' empty-filters';
             message(catalogCount ? 'No Home catalogs are visible for this selection. Choose which catalogs to show in Settings.' : 'Your installed addons do not provide Home catalogs. Add a content addon in Settings.', false, shelves);
-            button('Choose Home catalogs', function () { settings(); focusFirst(document.getElementById('home-catalogs')); ensureVisible(document.activeElement); }, shelves);
+            button('Choose Home catalogs', function () { settings('catalogs'); }, shelves);
             focusFirst(shelves);
         }
         if (restore && rows[discoverState.row] && !rows[discoverState.row].loaded) { loadRow(rows[discoverState.row]); rows[discoverState.row].section.scrollIntoView(); }
@@ -556,35 +556,67 @@
         });
         refresh();
     }
-    function linkAccount(parent, mine) {
-        var box = node('div', null, 'panel'); parent.appendChild(box); message('Requesting sign-in code…', false, box);
+    function linkAccount(parent, mine, control) {
+        cancelLink(); var serial = linkSerial;
+        var old = parent.querySelector('.account-sign-in'); if (old) parent.removeChild(old);
+        var box = node('div', null, 'panel account-sign-in'); parent.appendChild(box); message('Requesting sign-in code…', false, box);
+        function cancelButton() {
+            var cancel = button('Cancel sign-in', function () { cancelLink(); parent.removeChild(box); control.disabled = false; control.focus(); ensureVisible(control); }, box);
+            cancel.focus(); ensureVisible(cancel);
+        }
+        cancelButton();
+        function alive() { return epoch === mine && serial === linkSerial; }
+        function failed(text) {
+            box.textContent = ''; message(text, true, box); control.disabled = false; control.focus(); ensureVisible(control);
+        }
         request(LINK + 'create?type=Create', null, function (err, response) {
-            if (epoch !== mine) return;
-            if (err || !response || response.error || !response.result || !response.result.code) { box.textContent = ''; return message(err ? err.message : 'Could not create a sign-in link.', true, box); }
+            if (!alive()) return;
+            if (err || !response || response.error || !response.result || !response.result.code) return failed(err ? err.message : 'Could not create a sign-in link. Please try again.');
             var result = response.result, attempts = 0; box.textContent = '';
             message('Open this Stremio link on your phone or computer and approve this TV:', false, box);
             box.appendChild(node('p', result.link, 'account-link')); box.appendChild(node('div', result.code, 'code'));
             message('Waiting for approval. Your password is entered only on Stremio’s website.', false, box);
+            cancelButton();
             function poll() {
-                if (epoch !== mine) return;
+                if (!alive()) return;
                 request(LINK + 'read?type=Read&code=' + encodeURIComponent(result.code), null, function (err2, data) {
-                    if (epoch !== mine) return;
+                    if (!alive()) return;
                     if (data && data.result && data.result.authKey) {
                         authKey = data.result.authKey; save('auth', authKey);
                         syncAddons(function (syncError) { if (epoch !== mine) return; settings(); status(syncError ? syncError.message : 'Signed in; addons imported.', !!syncError); });
                         return;
                     }
-                    if (++attempts >= 120) { box.textContent = ''; message('Sign-in timed out. Request a new code.', true, box); return; }
+                    if (++attempts >= 120) { failed('Sign-in timed out. Request a new code.'); return; }
                     linkTimer = setTimeout(poll, 3000);
                 });
             }
             linkTimer = setTimeout(poll, 2000);
         });
     }
-    function settings() {
+    function settings(section) {
+        if (typeof section !== 'string') section = 'account';
         nav('Settings'); var mine = begin('Settings', settings);
+        view.className = 'settings-view';
+        var menu = node('div', null, 'settings-sections'), content = node('div', null, 'settings-content');
+        menu.setAttribute('role', 'navigation'); menu.setAttribute('aria-label', 'Settings sections');
+        view.appendChild(menu); view.appendChild(content);
+        message('Up / Down to move · Left for sections · Right / OK to open', false, menu);
+        function addSection(box, id, title) {
+            box.id = id === 'catalogs' ? 'home-catalogs' : 'settings-' + id; box.setAttribute('data-settings-section', id); content.appendChild(box);
+            var jump = button(title, function () { focusFirst(box); window.scrollBy(0, box.getBoundingClientRect().top - document.querySelector('header').getBoundingClientRect().bottom - 20); ensureVisible(document.activeElement); }, menu);
+            jump.setAttribute('data-settings-target', id); jump.setAttribute('aria-controls', box.id);
+        }
+        var accountBox = node('div', null, 'panel');
+        accountBox.appendChild(node('h2', 'Stremio account'));
+        message(authKey ? 'Signed in. Imported addons and library are read from your account.' : 'Sign in on your phone to import your existing addons and library.', false, accountBox);
+        if (authKey) {
+            button('Refresh account addons', function () { status('Importing addons…'); syncAddons(function (err) { if (epoch !== mine) return; settings(); status(err ? err.message : 'Addons refreshed.', !!err); }); }, accountBox);
+            button('Sign out and clear imported addons', function () { authKey = ''; addons = [CINEMETA]; library = []; hiddenCatalogs = []; save('auth', ''); save('addons', addons); pruneHiddenCatalogs(); settings(); }, accountBox);
+        } else button('Sign in with Stremio', function () { this.disabled = true; linkAccount(accountBox, mine, this); }, accountBox);
+        message('The account session and configured addon URLs are stored on this TV. Sign out removes them. Watch progress stays local; this client does not write to your Stremio account.', false, accountBox);
+        addSection(accountBox, 'account', 'Stremio account');
         if (window.StremioAuto) {
-            var updates = node('section', null, 'panel'); updates.appendChild(node('h2', 'Automatic updates')); view.appendChild(updates);
+            var updates = node('section', null, 'panel'); updates.appendChild(node('h2', 'Automatic updates')); addSection(updates, 'updates', 'Automatic updates');
             message('Updates are checked when you open this app. Your video is never interrupted. Keep this same TizenBrew module for future fixes.', false, updates);
             var updateStatus = message('Installed version ' + window.StremioAuto.version, false, updates);
             function showUpdate(data) {
@@ -598,16 +630,8 @@
             }, updates);
             button('Reopen app', function () { window.location.reload(); }, updates);
         }
-        homeCatalogSettings();
-        var accountBox = node('div', null, 'panel'); view.appendChild(accountBox);
-        accountBox.appendChild(node('h2', 'Stremio account'));
-        message(authKey ? 'Signed in. Imported addons and library are read from your account.' : 'Sign in on your phone to import your existing addons and library.', false, accountBox);
-        if (authKey) {
-            button('Refresh account addons', function () { status('Importing addons…'); syncAddons(function (err) { if (epoch !== mine) return; settings(); status(err ? err.message : 'Addons refreshed.', !!err); }); }, accountBox);
-            button('Sign out and clear imported addons', function () { authKey = ''; addons = [CINEMETA]; library = []; hiddenCatalogs = []; save('auth', ''); save('addons', addons); pruneHiddenCatalogs(); settings(); }, accountBox);
-        } else button('Sign in with Stremio', function () { this.disabled = true; linkAccount(accountBox, mine); }, accountBox);
-        message('The account session and configured addon URLs are stored on this TV. Sign out removes them. Watch progress stays local; this client does not write to your Stremio account.', false, accountBox);
-        var addonBox = node('div', null, 'panel'); view.appendChild(addonBox); addonBox.appendChild(node('h2', 'Content addons'));
+        homeCatalogSettings(); addSection(document.getElementById('home-catalogs'), 'catalogs', 'Home catalogs');
+        var addonBox = node('div', null, 'panel'); addSection(addonBox, 'addons', 'Content addons'); addonBox.appendChild(node('h2', 'Content addons'));
         message('Local Files is excluded because its desktop Stremio service is unavailable in this TV client.', false, addonBox);
         addons.forEach(function (a, i) {
             var row = node('div', null, 'toolbar'); row.appendChild(node('span', a.manifest.name || 'Addon'));
@@ -630,7 +654,7 @@
                 if (!found) addons.push({transportUrl: target, manifest: manifest}); save('addons', addons); settings(); status('Addon ready.');
             });
         };
-        var testBox = node('div', null, 'panel'); view.appendChild(testBox); testBox.appendChild(node('h2', 'Playback check'));
+        var testBox = node('div', null, 'panel'); addSection(testBox, 'playback', 'Playback check'); testBox.appendChild(node('h2', 'Playback check'));
         var bufferLabel = node('label', 'Streaming buffer'), bufferSelect = document.createElement('select');
         bufferSelect.id = 'buffer-mode'; bufferLabel.htmlFor = bufferSelect.id; testBox.appendChild(bufferLabel); testBox.appendChild(bufferSelect);
         [['balanced', 'Balanced · 10s start / 15s recovery'], ['steady', 'Extra buffering · 15s start / 20s recovery'], ['default', 'TV default']].forEach(function (entry) {
@@ -644,8 +668,9 @@
             play({url: 'https://media.w3.org/2010/05/bunny/trailer.mp4'}, {type: 'movie', id: 'blender-bbb', name: 'Big Buck Bunny'}, 'blender-bbb', 'Big Buck Bunny · playback test');
         }, testBox);
         message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
-        if (session && serviceVersion !== '3.1.1') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
-        focusFirst(); status('Stremio Lite 3.1.1 · unofficial client for older TVs');
+        if (session && serviceVersion !== '3.1.2') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        var initial = content.querySelector('[data-settings-section="' + section + '"]') || accountBox;
+        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.2 · unofficial client for older TVs');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
@@ -1067,7 +1092,48 @@
         message('Timing adjusts addon subtitle files; embedded track timing is controlled by the TV.', false, adjustments);
         focusChoice(); showBar();
     }
+    function settingsPanel(el) {
+        while (el && el !== view) { if (el.getAttribute && el.getAttribute('data-settings-section')) return el; el = el.parentNode; }
+        return null;
+    }
+    document.addEventListener('focusin', function (e) {
+        if (view.className !== 'settings-view' || playback) return;
+        var panel = settingsPanel(e.target), id = panel ? panel.getAttribute('data-settings-section') : e.target.getAttribute('data-settings-target');
+        if (!id) return;
+        Array.prototype.forEach.call(view.querySelectorAll('[data-settings-target]'), function (b) {
+            var selected = b.getAttribute('data-settings-target') === id;
+            b.className = selected ? 'selected' : ''; b.setAttribute('aria-current', selected ? 'true' : 'false');
+        });
+    });
+    function settingsFocus(code) {
+        if (view.className !== 'settings-view' || playback) return false;
+        var active = document.activeElement, menu = view.querySelector('.settings-sections'), panel = settingsPanel(active);
+        var entries = Array.prototype.slice.call(menu.querySelectorAll('button')), index = entries.indexOf(active), target;
+        if (index >= 0) {
+            if (code === 38) target = entries[index - 1] || document.querySelector('#nav [aria-current="page"]');
+            else if (code === 40) target = entries[index + 1];
+            else if (code === 39) { active.click(); return true; }
+            if (target) target.focus(); return true;
+        }
+        if (!panel) {
+            if (code === 40 && document.getElementById('nav').contains(active)) { (menu.querySelector('.selected') || entries[0]).focus(); return true; }
+            return false;
+        }
+        var controls = Array.prototype.slice.call(view.querySelectorAll('.settings-content button:not([disabled]),.settings-content input:not([disabled]),.settings-content select:not([disabled])')).filter(function (el) { return el.offsetWidth && el.offsetHeight; });
+        index = controls.indexOf(active);
+        if (code === 38 || code === 40) {
+            target = controls[index + (code === 38 ? -1 : 1)];
+            if (!target && code === 38) target = entries[0];
+        } else {
+            var rect = active.getBoundingClientRect(), step = code === 37 ? -1 : 1, candidate = controls[index + step];
+            if (candidate && settingsPanel(candidate) === panel && Math.abs(candidate.getBoundingClientRect().top - rect.top) < 10) target = candidate;
+            else if (code === 37) target = menu.querySelector('[data-settings-target="' + panel.getAttribute('data-settings-section') + '"]');
+        }
+        if (target) { target.focus(); if (!menu.contains(target)) ensureVisible(target); }
+        return true;
+    }
     function moveFocus(code, scope) {
+        if (settingsFocus(code)) return;
         var all = Array.prototype.slice.call(scope.querySelectorAll('button:not([disabled]),input,select'));
         var active = document.activeElement, from = active && active.getBoundingClientRect(), best = null, score = Infinity;
         if (!from || !scope.contains(active)) return focusFirst(scope);
@@ -1103,7 +1169,8 @@
         }
     }
     function ensureVisible(el) {
-        var r = el.getBoundingClientRect(), top = 115;
+        if (!el || document.getElementById('nav').contains(el) || (el.parentNode && el.parentNode.className === 'settings-sections')) return;
+        var r = el.getBoundingClientRect(), top = document.querySelector('header').getBoundingClientRect().bottom + 12;
         if (r.bottom > window.innerHeight - 50) window.scrollBy(0, r.bottom - window.innerHeight + 50);
         else if (r.top < top) window.scrollBy(0, r.top - top);
     }
@@ -1132,6 +1199,9 @@
         if (code === 10009 || code === 27 || (code === 8 && tag !== 'INPUT')) {
             e.preventDefault(); if (playback && document.getElementById('track-menu').className !== 'hidden') closeTrackMenu();
             else if (playback && playback.scrub !== null) cancelScrub();
+            else if (!playback && view.className === 'settings-view' && settingsPanel(document.activeElement)) {
+                var p = settingsPanel(document.activeElement); view.querySelector('[data-settings-target="' + p.getAttribute('data-settings-section') + '"]').focus();
+            } else if (!playback && view.className === 'settings-view' && view.querySelector('.settings-sections').contains(document.activeElement)) document.querySelector('#nav [aria-current="page"]').focus();
             else goBack(); return;
         }
         if (playback) {

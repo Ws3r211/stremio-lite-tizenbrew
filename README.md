@@ -2,6 +2,14 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 3.1.2: reachable account controls and predictable Settings navigation
+
+Settings opens on Stremio account, before catalog lists. A fixed section menu jumps directly to account, updates, Home catalogs, addons and playback. Up/Down visits controls in order; Left returns to the section menu, Right/OK opens a section, and Return moves from controls to sections to the top navigation. Focus stays visible below the header and above the footer, including long catalog lists. Text fields retain Left/Right editing; the buffer dropdown retains Up/Down option selection and Left returns to sections.
+
+Failed or expired sign-in requests re-enable the sign-in button, and an in-progress request can be cancelled. Late responses from a cancelled attempt are ignored. Signed-in TVs show refresh/sign-out controls in the first section.
+
+Keep `Ws3r211/stremio-lite-tizenbrew@v3.1.0`. Reopen Stremio Lite Auto to update; Settings reports runtime 3.1.2. No new module or Developer Mode IP change is required. Regression checks cover signed-out and signed-in TVs, failed login retry, cancellation, 40-catalog remote navigation and focus visibility at 1920x1080 and 1280x720. These use synthetic account responses, not a physical TV.
+
 ## Version 3.1.1: restore controls on the 2017 TV browser
 
 The player overlay and subtitle backdrop now use explicit top/right/bottom/left edges instead of the newer CSS inset shorthand. A browser that ignored inset collapsed the absolutely positioned overlay: the header shrank into the top-left corner and the bottom timeline/buttons fell outside the visible player. The fix retains the full-screen overlay on Chromium 47 and keeps paused controls visible.
