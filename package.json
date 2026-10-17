@@ -1,0 +1,33 @@
+{
+  "name": "stremio-lite-tizenbrew",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unofficial Stremio-compatible client for older Samsung TVs. Hardware validation pending.",
+  "license": "MIT",
+  "repository": {"type": "git", "url": "https://github.com/Ws3r211/stremio-lite-tizenbrew.git"},
+  "packageType": "app",
+  "appName": "Stremio Lite",
+  "appPath": "app/index.html",
+  "serviceFile": "service.js",
+  "keys": [
+    "MediaPlayPause",
+    "MediaPlay",
+    "MediaPause",
+    "MediaStop",
+    "MediaRewind",
+    "MediaFastForward"
+  ],
+  "scripts": {
+    "start": "node service.js",
+    "test": "node test/core.test.cjs"
+  },
+  "files": [
+    "app",
+    "service.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "devDependencies": {
+    "acorn": "^8.15.0"
+  }
+}
