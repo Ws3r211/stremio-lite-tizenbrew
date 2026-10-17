@@ -2,6 +2,14 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 3.1.1: restore controls on the 2017 TV browser
+
+The player overlay and subtitle backdrop now use explicit top/right/bottom/left edges instead of the newer CSS inset shorthand. A browser that ignored inset collapsed the absolutely positioned overlay: the header shrank into the top-left corner and the bottom timeline/buttons fell outside the visible player. The fix retains the full-screen overlay on Chromium 47 and keeps paused controls visible.
+
+Keep the original `Ws3r211/stremio-lite-tizenbrew@v3.1.0` automatic module. Reopen Stremio Lite Auto (or use Settings > Automatic updates > Check for updates, then Reopen app). Settings should show installed app/service 3.1.1. A new module entry is unnecessary.
+
+The regression check removes unsupported inset declarations before loading the app, then verifies paused player geometry, every transport button, the timeline, remote scrubbing and the subtitle backdrop at 1920x1080 and 1280x720. The pre-fix CSS fails this check and reproduces the collapsed corner header. This is a targeted compatibility simulation; physical-TV confirmation is still required.
+
 ## Version 3.1.0: install once, update on launch
 
 Add `Ws3r211/stremio-lite-tizenbrew@v3.1.0` once in TizenBrew and fully restart the TV to replace its cached service. Launch **Stremio Lite Auto** and keep this entry for future releases. The module version remains the permanent launcher's version; Settings shows the installed app/service version. Your Developer Mode IP stays unchanged. The TV fetches updates itself; no PC or scheduled task is needed.
