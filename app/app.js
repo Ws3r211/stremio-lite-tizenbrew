@@ -10,6 +10,8 @@
     }};
     var session = null, serviceVersion = '', epoch = 0, currentPage = null, previous = [], linkTimer = null;
     var playback = null, playbackEpoch = 0, cues = [], barTimer = null, subtitleTimer = null;
+    var catalogCache = {}, heroCache = {}, discoverState = {type: 'all', row: 0, card: 0}, discoverTick = null;
+    var homeScroll = null, heroTimer = null;
     function read(key, fallback) { try { return JSON.parse(localStorage.getItem('sl.' + key)) || fallback; } catch (e) { return fallback; } }
     function save(key, value) { try { localStorage.setItem('sl.' + key, JSON.stringify(value)); } catch (e) { status('TV storage is full; settings could not be saved.'); } }
     var authKey = read('auth', ''), addons = read('addons', [CINEMETA]), library = [], progress = read('progress', {});
@@ -78,8 +80,10 @@
     function cancelLink() { if (linkTimer) clearTimeout(linkTimer); linkTimer = null; }
     function begin(title, page, remember) {
         cancelLink();
+        homeScroll = null; clearTimeout(discoverTick); clearTimeout(heroTimer);
         if (remember && currentPage) previous.push(currentPage);
         currentPage = page; epoch++; view.textContent = ''; view.appendChild(node('h1', title));
+        view.className = ''; document.body.className = ''; document.getElementById('status').className = '';
         window.scrollTo(0, 0); return epoch;
     }
     function goBack() {
@@ -91,7 +95,7 @@
         var n = document.getElementById('nav'); n.textContent = '';
         [['Discover', home], ['Search', searchPage], ['Library', libraryPage], ['Settings', settings]].forEach(function (item) {
             var b = button(item[0], function () { previous = []; item[1](); }, n);
-            if (item[0] === active) b.className = 'active';
+            if (item[0] === active) { b.className = 'active'; b.setAttribute('aria-current', 'page'); }
         });
     }
     function cards(items, parent) {
@@ -107,40 +111,169 @@
         });
         if (!grid.children.length) message('No titles returned.', false, parent);
     }
-    function home() {
-        nav('Discover'); var mine = begin('Discover', home), choices = C.catalogs(addons, false);
-        var toolbar = node('div', null, 'toolbar'), select = document.createElement('select');
-        select.setAttribute('aria-label', 'Catalog'); toolbar.appendChild(select); view.appendChild(toolbar);
-        choices.forEach(function (choice, i) {
-            var c = choice.catalog, o = node('option', choice.addon.manifest.name + ' · ' + (c.name || c.id) + ' · ' + c.type);
-            o.value = String(i); select.appendChild(o);
+    function home(restore) {
+        nav('Discover'); var mine = begin('Discover', function () { home(true); }), choices = C.catalogs(addons, false);
+        view.textContent = ''; view.className = 'discover-view'; document.body.className = 'discover';
+        // Keep account order within each group, while making custom catalogs immediately visible.
+        choices = choices.filter(function (x) { return x.addon.manifest.id !== CINEMETA.manifest.id; }).concat(
+            choices.filter(function (x) { return x.addon.manifest.id === CINEMETA.manifest.id; }));
+        if (discoverState.type !== 'all') choices = choices.filter(function (x) { return x.catalog.type === discoverState.type; });
+        var backdrop = document.createElement('img'); backdrop.className = 'discover-backdrop'; backdrop.alt = ''; view.appendChild(backdrop);
+        backdrop.onerror = function () { backdrop.removeAttribute('src'); };
+        var hero = node('section', null, 'discover-hero'); hero.setAttribute('aria-label', 'Featured title'); view.appendChild(hero);
+        hero.appendChild(node('p', 'Discover', 'eyebrow'));
+        hero.appendChild(node('h1', 'Find your next great story.', 'discover-heading'));
+        hero.appendChild(node('p', 'All your catalogs. One place.', 'discover-tagline'));
+        var feature = node('div', null, 'feature-copy'), featureTitle = node('h2', 'Your next story awaits', 'feature-title'); hero.appendChild(feature);
+        feature.appendChild(featureTitle); var featureMeta = node('p', '', 'feature-meta'); feature.appendChild(featureMeta);
+        var featureDescription = node('p', 'Browse your installed catalogs below.', 'feature-description'); feature.appendChild(featureDescription);
+        var selected = null, selectedKey = '', heroSerial = 0;
+        var detailButton = button('View details', function () { if (selected) details(selected); }, feature); detailButton.className = 'primary'; detailButton.disabled = true;
+        var filters = node('div', null, 'discover-filters'); filters.setAttribute('aria-label', 'Content type');
+        [['all', 'All'], ['movie', 'Movies'], ['series', 'Series']].forEach(function (entry) {
+            var b = button(entry[1], function () { discoverState.type = entry[0]; discoverState.row = 0; discoverState.card = 0; home(); }, filters);
+            b.className = discoverState.type === entry[0] ? 'selected' : ''; b.setAttribute('aria-pressed', String(discoverState.type === entry[0]));
         });
-        var results = node('div'); view.appendChild(results);
-        var skip = 0, fetched = [], more;
-        function load(append) {
-            if (!choices.length) return message('No browseable catalogs. Add an addon in Settings.', false, results);
-            var choice = choices[Number(select.value) || 0], c = choice.catalog;
-            if (!append) { skip = 0; fetched = []; results.textContent = ''; }
-            if (more) more.disabled = true;
-            status('Loading catalog…');
-            request(C.resourceURL(choice.addon, 'catalog', c.type, c.id, skip ? {skip: skip} : {}), null, function (err, data) {
-                if (epoch !== mine) return;
-                if (err) {
-                    status(choice.addon.manifest.name + ': ' + err.message, true);
-                    if (more) more.disabled = false;
-                    else if (!append) { results.textContent = ''; button('Retry catalog', function () { load(false); }, results); }
-                    return;
+        view.appendChild(filters);
+        var shelves = node('div', null, 'catalog-shelves'); view.appendChild(shelves);
+        var rows = [], running = 0, queue = [], restored = false, firstFocused = false;
+        function paintHero(meta, serial) {
+            if (epoch !== mine || serial !== heroSerial) return;
+            selected = meta; featureTitle.textContent = meta.name; featureTitle.className = 'feature-title' + (meta.name.length > 20 ? ' long-title' : '');
+            featureMeta.textContent = [meta.releaseInfo || meta.year, meta.type === 'series' ? 'Series' : 'Movie', (meta.genres || []).slice(0, 2).join(' / ')].filter(Boolean).join(' · ');
+            featureDescription.textContent = meta.description || 'Explore this title and find sources from your installed addons.';
+            detailButton.disabled = false;
+            var image = meta.background || '';
+            if (/^https?:\/\//i.test(image)) { if (backdrop.getAttribute('src') !== image) backdrop.src = image; }
+            else backdrop.removeAttribute('src');
+        }
+        function selectHero(meta, choice) {
+            var key = choice.addon.transportUrl + '|' + meta.type + ':' + meta.id;
+            if (selectedKey === key) return; selectedKey = key; var serial = ++heroSerial;
+            paintHero(heroCache[key] || meta, serial); clearTimeout(heroTimer);
+            if (heroCache[key] || (meta.background && meta.description)) return;
+            heroTimer = setTimeout(function () {
+                if (epoch !== mine || serial !== heroSerial || playback) return;
+                var providers = [choice.addon].concat(addons.filter(function (a) { return a !== choice.addon; }));
+                providers = providers.filter(function (a) { return C.supports(a, 'meta', meta.type, meta.id); }).slice(0, 2);
+                function next() {
+                    if (!providers.length || epoch !== mine || serial !== heroSerial || playback) return;
+                    request(C.resourceURL(providers.shift(), 'meta', meta.type, meta.id), null, function (err, data) {
+                        if (epoch !== mine || serial !== heroSerial) return;
+                        if (err || !data || !data.meta) return next();
+                        var full = {}, k; for (k in meta) full[k] = meta[k]; for (k in data.meta) full[k] = data.meta[k];
+                        if (Object.keys(heroCache).length >= 30) heroCache = {};
+                        heroCache[key] = full; paintHero(full, serial);
+                    });
                 }
-                var metas = data.metas || []; fetched = fetched.concat(metas); skip += metas.length;
-                results.textContent = ''; cards(fetched, results);
-                more = null;
-                if (metas.length && C.catalogExtra(c, 'skip')) more = button('Load more', function () { load(true); }, results);
-                status(fetched.length + ' titles · ' + (session ? 'TV service connected' : 'Direct network mode'));
-                if (!append) focusFirst(results);
+                next();
+            }, 350);
+        }
+        function pump() {
+            if (epoch !== mine || playback) return;
+            while (running < 2 && queue.length) queue.shift()();
+        }
+        function rowCards(row) {
+            row.track.textContent = ''; var items = row.items.slice(0, row.visible);
+            items.forEach(function (meta, index) {
+                var b = button('', function () { details(meta); }, row.track); b.className = 'card shelf-card';
+                b.setAttribute('data-card-index', String(index)); b.setAttribute('data-row-index', String(row.index));
+                var image = document.createElement('img'); image.alt = ''; image.setAttribute('data-src', /^https?:\/\//i.test(meta.poster || '') ? meta.poster : ''); b.appendChild(image);
+                image.onerror = function () { this.style.visibility = 'hidden'; };
+                b.appendChild(node('span', meta.name, 'name')); b.appendChild(node('span', meta.releaseInfo || meta.year || meta.type, 'year'));
+                b.onfocus = function () {
+                    discoverState.row = row.index; discoverState.card = index;
+                    var left = b.offsetLeft, right = left + b.offsetWidth;
+                    if (left < row.track.scrollLeft + 8) row.track.scrollLeft = Math.max(0, left - 8);
+                    else if (right > row.track.scrollLeft + row.track.clientWidth - 8) row.track.scrollLeft = right - row.track.clientWidth + 8;
+                    loadImages(row); selectHero(meta, row.choice);
+                };
+            });
+            if (row.items.length > row.visible || row.hasMore) {
+                var more = button('Load more', function () {
+                    if (row.items.length > row.visible) {
+                        row.visible = Math.min(row.items.length, row.visible + 12);
+                        rowCards(row); row.track.querySelector('[data-card-index="' + items.length + '"]').focus();
+                    } else { row.visible += 12; loadRow(row, true); }
+                }, row.track); more.className = 'shelf-more';
+            }
+            if (!items.length) message('No titles in this catalog yet.', false, row.track);
+            loadImages(row);
+            if (!selected && items.length) selectHero(items[0], row.choice);
+            if (restore && !restored && row.index === discoverState.row && items.length) {
+                restored = true; firstFocused = true;
+                var target = row.track.querySelector('[data-card-index="' + Math.min(discoverState.card, items.length - 1) + '"]');
+                target.focus(); ensureVisible(target);
+            } else if (!restore && !firstFocused && row.index === 0 && items.length) { firstFocused = true; row.track.querySelector('.card').focus(); }
+        }
+        function loadImages(row) {
+            var r = row.section.getBoundingClientRect(); if (r.top > window.innerHeight + 200 || r.bottom < 0) return;
+            Array.prototype.forEach.call(row.track.querySelectorAll('img[data-src]'), function (image) {
+                var b = image.parentNode, x = b.offsetLeft - row.track.scrollLeft;
+                if (x < row.track.clientWidth + 260 && x + b.offsetWidth > -260) {
+                    var src = image.getAttribute('data-src'); if (src) image.src = src; image.removeAttribute('data-src');
+                }
             });
         }
-        select.onchange = function () { mine = ++epoch; load(false); };
-        load(false);
+        function loadRow(row, append) {
+            if (row.loading) return; row.loading = true;
+            if (!append) { row.track.textContent = ''; message('Loading catalog…', false, row.track); }
+            else { var more = row.track.querySelector('.shelf-more'); if (more) { more.disabled = true; more.textContent = 'Loading…'; } }
+            queue.push(function () {
+                running++;
+                var c = row.choice.catalog, extras = append ? {skip: row.offset} : {};
+                request(C.resourceURL(row.choice.addon, 'catalog', c.type, c.id, extras), null, function (err, data) {
+                    running--; if (epoch !== mine) return;
+                    row.loading = false; row.loaded = true;
+                    if (err || !data || !Array.isArray(data.metas)) {
+                        row.loaded = false; row.failed = true; row.track.textContent = '';
+                        var text = row.choice.addon.manifest.name + ': ' + (err ? err.message : 'Invalid catalog response.');
+                        message(text, true, row.track); status(text, true);
+                        button('Retry catalog', function () { row.failed = false; loadRow(row, append); }, row.track);
+                    } else {
+                        row.failed = false; row.offset = (append ? row.offset : 0) + data.metas.length;
+                        var oldLength = row.items.length;
+                        row.items = C.uniqueMetas((append ? row.items : []).concat(data.metas)).slice(0, 120);
+                        row.hasMore = !!data.metas.length && C.catalogExtra(c, 'skip') && row.items.length < 120 && (!append || row.items.length > oldLength);
+                        if (Object.keys(catalogCache).length >= 40) catalogCache = {};
+                        catalogCache[row.key] = {items: row.items, offset: row.offset, hasMore: row.hasMore, date: Date.now()};
+                        rowCards(row); status('Your catalogs, together.');
+                    }
+                    pump();
+                });
+            });
+            pump();
+        }
+        choices.forEach(function (choice, index) {
+            var section = node('section', null, 'catalog-row'), head = node('div', null, 'shelf-heading');
+            var title = choice.catalog.name || (choice.catalog.type === 'series' ? 'Popular series' : 'Trending movies');
+            var heading = node('h2', title); heading.id = 'catalog-' + index; head.appendChild(heading);
+            head.appendChild(node('span', choice.addon.manifest.name, 'catalog-provider'));
+            head.appendChild(node('span', choice.catalog.type === 'series' ? 'Series' : choice.catalog.type === 'movie' ? 'Movies' : choice.catalog.type, 'catalog-kind'));
+            if (index === 0) head.appendChild(filters);
+            section.setAttribute('aria-labelledby', heading.id); section.appendChild(head);
+            var track = node('div', null, 'shelf-track'); track.setAttribute('data-row-index', String(index)); section.appendChild(track); shelves.appendChild(section);
+            var key = C.resourceURL(choice.addon, 'catalog', choice.catalog.type, choice.catalog.id);
+            var row = {index: index, choice: choice, section: section, track: track, key: key, items: [], offset: 0, visible: restore && index === discoverState.row ? Math.max(12, discoverState.card + 1) : 12};
+            rows.push(row); var cached = catalogCache[key];
+            if (cached && Date.now() - cached.date < 300000) {
+                row.items = cached.items; row.offset = cached.offset; row.hasMore = cached.hasMore; row.loaded = true; rowCards(row);
+            } else button('Load catalog', function () { loadRow(row); }, track);
+            track.onscroll = function () { loadImages(row); };
+        });
+        homeScroll = function () {
+            if (epoch !== mine || playback) return;
+            rows.forEach(function (row) {
+                var rect = row.section.getBoundingClientRect();
+                if (rect.top < window.innerHeight + 360 && rect.bottom > 0) {
+                    if (!row.loaded && !row.loading && !row.failed) loadRow(row);
+                    else loadImages(row);
+                }
+            });
+        };
+        if (!choices.length) { message('No catalogs for this selection. Add a content addon in Settings.', false, shelves); focusFirst(filters); }
+        if (restore && rows[discoverState.row] && !rows[discoverState.row].loaded) { loadRow(rows[discoverState.row]); rows[discoverState.row].section.scrollIntoView(); }
+        homeScroll(); status('Your catalogs, together.');
     }
     function searchPage() {
         nav('Search'); var mine = begin('Search', searchPage), form = node('form', null, 'toolbar');
@@ -222,7 +355,10 @@
                             if (!can.ok) return status(can.reason, true);
                             play(stream, meta, id, title);
                         }, list);
-                        b.appendChild(node('small', can.ok ? 'HTTP video · codec support depends on your TV' : can.reason));
+                        var info = C.streamInfo(stream);
+                        if (info.tags.length) b.appendChild(node('span', info.tags.join(' · '), 'stream-tags'));
+                        info.warnings.forEach(function (warning) { b.appendChild(node('span', warning, 'stream-warning')); });
+                        b.appendChild(node('small', can.ok ? 'Direct video · Select to play' : can.reason));
                     });
                     if (--pending) return;
                     status(total + ' sources' + (failures ? ' · ' + failures + ' addons failed' : ''));
@@ -316,13 +452,21 @@
             });
         };
         var testBox = node('div', null, 'panel'); view.appendChild(testBox); testBox.appendChild(node('h2', 'Playback check'));
+        var bufferLabel = node('label', 'Streaming buffer'), bufferSelect = document.createElement('select');
+        bufferSelect.id = 'buffer-mode'; bufferLabel.htmlFor = bufferSelect.id; testBox.appendChild(bufferLabel); testBox.appendChild(bufferSelect);
+        [['balanced', 'Balanced · 10s start / 15s recovery'], ['steady', 'Extra buffering · 15s start / 20s recovery'], ['default', 'TV default']].forEach(function (entry) {
+            var option = node('option', entry[1]); option.value = entry[0]; bufferSelect.appendChild(option);
+        });
+        bufferSelect.value = read('bufferMode', 'balanced');
+        bufferSelect.onchange = function () { save('bufferMode', bufferSelect.value); status('Buffer setting saved for the next video.'); };
+        message('Extra buffering can reduce pauses on an uneven connection, with a longer wait before playback. If a source still buffers, try 1080p H.264 or a lower bitrate. Dolby Vision is unsupported; choose HDR10 or SDR. Buffer controls apply to Samsung AVPlay.', false, testBox);
         message('Test your player with Blender’s Big Buck Bunny MP4 before testing your own streams.', false, testBox);
         button('Play test video', function () {
             play({url: 'https://media.w3.org/2010/05/bunny/trailer.mp4'}, {type: 'movie', id: 'blender-bbb', name: 'Big Buck Bunny'}, 'blender-bbb', 'Big Buck Bunny · playback test');
         }, testBox);
         message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
-        if (session && serviceVersion !== '0.1.1') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
-        focusFirst(); status('Stremio Lite 0.1.1 · unofficial client for older TVs');
+        if (session && serviceVersion !== '0.2.0') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        focusFirst(); status('Stremio Lite 0.2.0 · unofficial client for older TVs');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
@@ -354,22 +498,40 @@
     function play(stream, meta, id, title) {
         var can = C.playable(stream); if (!can.ok) return status(can.reason, true);
         if (playback) stopPlayback(); var generation = ++playbackEpoch, av = nativePlayer(), video = document.getElementById('video');
-        playback = {id: id, meta: meta, stream: stream, seconds: 0, duration: 0, lastSaved: 0, native: !!av, paused: false, preparing: true};
+        playback = {id: id, meta: meta, stream: stream, seconds: 0, duration: 0, lastSaved: 0, native: !!av, paused: false, preparing: true, stalls: 0, bufferEvents: 0, lastUISecond: -1};
         document.body.className = 'playing'; document.getElementById('player').className = '';
         document.getElementById('playing-title').textContent = title; document.getElementById('track-menu').className = 'hidden';
         document.getElementById('time').textContent = ''; document.getElementById('subtitle').textContent = ''; cues = [];
         playbackStatus('Preparing video…'); showBar(); document.getElementById('pause').focus();
         var resume = progress[id], resumeAt = resume && resume.seconds > 10 && resume.seconds < resume.duration - 20 ? resume.seconds : 0;
         function active() { return playback && generation === playbackEpoch; }
-        function failed() { if (!active()) return; showBar(); playbackStatus('Playback failed. Try another source or codec. Return stops the player.'); }
+        function failed() { if (!active()) return; showBar(); playbackStatus('Playback failed. Try 1080p H.264, HDR10 or SDR, or another source. Return stops the player.'); }
+        function buffering(percent) {
+            if (!active()) return;
+            if (percent === undefined) { playback.bufferEvents++; if (!playback.preparing) playback.stalls++; }
+            showBar();
+            playbackStatus('Buffering' + (percent === undefined ? '…' : ' ' + percent + '%') + (playback.stalls >= 2 ? ' · Repeated pauses: try a lower bitrate or enable Extra buffering in Settings.' : ''));
+        }
         if (av) {
             video.className = 'hidden'; document.getElementById('av-player').className = '';
             try {
                 av.open(can.url); av.setDisplayRect(0, 0, 1920, 1080);
-                av.setListener({onbufferingstart: function () { if (active()) playbackStatus('Buffering…'); },
-                    onbufferingprogress: function (p) { if (active()) playbackStatus('Buffering ' + p + '%'); },
+                var mode = read('bufferMode', 'balanced');
+                if (mode !== 'default' && typeof av.setBufferingParam === 'function') {
+                    // Samsung requires IDLE: configure after open, before prepareAsync.
+                    try { av.setBufferingParam('PLAYER_BUFFER_FOR_PLAY', 'PLAYER_BUFFER_SIZE_IN_SECOND', mode === 'steady' ? 15 : 10); } catch (bufferError) {}
+                    try { av.setBufferingParam('PLAYER_BUFFER_FOR_RESUME', 'PLAYER_BUFFER_SIZE_IN_SECOND', mode === 'steady' ? 20 : 15); } catch (resumeBufferError) {}
+                    try { if (typeof av.setTimeoutForBuffering === 'function') av.setTimeoutForBuffering(mode === 'steady' ? 45 : 30); } catch (timeoutError) {}
+                }
+                av.setListener({onbufferingstart: function () { buffering(); },
+                    onbufferingprogress: function (p) { buffering(p); },
                     onbufferingcomplete: function () { if (active()) playbackStatus('Playing'); },
-                    oncurrentplaytime: function (ms) { if (active()) updateTime(ms / 1000, av.getDuration() / 1000); },
+                    oncurrentplaytime: function (ms) {
+                        if (!active()) return;
+                        // Avoid multiple layout/storage/subtitle scans per frame on older TVs.
+                        var second = Math.floor(ms / 250); if (second === playback.lastUISecond) return;
+                        playback.lastUISecond = second; updateTime(ms / 1000, av.getDuration() / 1000);
+                    },
                     onstreamcompleted: function () { if (active()) stopPlayback(); }, onerror: failed,
                     onsubtitlechange: function (duration, text) {
                         if (!active() || cues.length) return;
@@ -385,6 +547,7 @@
         } else {
             video.className = ''; document.getElementById('av-player').className = 'hidden';
             video.onerror = failed; video.onended = function () { if (active()) stopPlayback(); };
+            video.preload = 'auto'; video.onwaiting = function () { buffering(); };
             video.ontimeupdate = function () { if (active()) updateTime(video.currentTime, video.duration); };
             video.onloadedmetadata = function () { if (active() && resumeAt) { try { video.currentTime = resumeAt; } catch (e) {} } };
             video.onplaying = function () { if (active()) { playback.preparing = false; playbackStatus('Playing · HTML5'); } };
@@ -396,7 +559,7 @@
         if (!playback) return; storeProgress(); var wasNative = playback.native; playback = null; ++playbackEpoch;
         if (barTimer) clearTimeout(barTimer); if (subtitleTimer) clearTimeout(subtitleTimer);
         if (wasNative) { try { nativePlayer().stop(); } catch (e) {} try { nativePlayer().close(); } catch (e) {} }
-        var video = document.getElementById('video'); video.onended = video.onerror = video.onplaying = video.ontimeupdate = video.onloadedmetadata = null;
+        var video = document.getElementById('video'); video.onended = video.onerror = video.onplaying = video.ontimeupdate = video.onloadedmetadata = video.onwaiting = null;
         video.pause(); video.removeAttribute('src'); video.load(); cues = [];
         document.getElementById('player').className = 'hidden'; document.body.className = '';
         document.getElementById('subtitle').textContent = ''; focusFirst();
@@ -456,6 +619,22 @@
         var all = Array.prototype.slice.call(scope.querySelectorAll('button:not([disabled]),input,select'));
         var active = document.activeElement, from = active && active.getBoundingClientRect(), best = null, score = Infinity;
         if (!from || !scope.contains(active)) return focusFirst(scope);
+        var track = active.parentNode, siblings, index, targetRow, target;
+        if (!playback && track && track.className === 'shelf-track') {
+            if (code === 37 || code === 39) {
+                siblings = Array.prototype.slice.call(track.querySelectorAll('button:not([disabled])'));
+                index = siblings.indexOf(active) + (code === 37 ? -1 : 1);
+                if (siblings[index]) { siblings[index].focus(); ensureVisible(siblings[index]); }
+                return;
+            }
+            index = Number(track.getAttribute('data-row-index'));
+            targetRow = view.querySelectorAll('.catalog-row')[index + (code === 38 ? -1 : 1)];
+            if (targetRow) {
+                target = targetRow.querySelector('[data-card-index="' + (active.getAttribute('data-card-index') || '0') + '"]') || targetRow.querySelector('button:not([disabled])');
+                if (target) { target.focus(); ensureVisible(target); if (homeScroll) homeScroll(); return; }
+            } else if (code === 38) { focusFirst(view.querySelector('.discover-filters')); ensureVisible(document.activeElement); return; }
+            else return;
+        }
         var x = from.left + from.width / 2, y = from.top + from.height / 2;
         all.forEach(function (el) {
             if (el === active || !el.offsetWidth || !el.offsetHeight) return;
@@ -468,14 +647,18 @@
         });
         if (!best && active.tagName === 'INPUT' && code === 40 && active.form) best = active.form.querySelector('button[type="submit"]');
         if (best) {
-            best.focus();
-            if (!playback) {
-                var focusedRect = best.getBoundingClientRect();
-                if (focusedRect.bottom > window.innerHeight - 90) window.scrollBy(0, focusedRect.bottom - window.innerHeight + 90);
-                else if (focusedRect.top < 20) window.scrollBy(0, focusedRect.top - 20);
-            }
+            best.focus(); if (!playback) ensureVisible(best);
         }
     }
+    function ensureVisible(el) {
+        var r = el.getBoundingClientRect(), top = 115;
+        if (r.bottom > window.innerHeight - 50) window.scrollBy(0, r.bottom - window.innerHeight + 50);
+        else if (r.top < top) window.scrollBy(0, r.top - top);
+    }
+    window.addEventListener('scroll', function () {
+        if (!homeScroll || discoverTick) return;
+        discoverTick = setTimeout(function () { discoverTick = null; if (homeScroll) homeScroll(); }, 100);
+    });
     document.getElementById('pause').onclick = function () { togglePause(); };
     document.getElementById('stop').onclick = stopPlayback;
     document.getElementById('rewind').onclick = function () { seek(-30); };

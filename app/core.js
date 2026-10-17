@@ -70,6 +70,26 @@
             return (Number(a.season) || 0) - (Number(b.season) || 0) || (Number(a.episode) || 0) - (Number(b.episode) || 0);
         });
     }
+    function streamInfo(stream) {
+        var hints = stream.behaviorHints || {}, text = [stream.name, stream.title, stream.description, hints.filename].join(' ');
+        var tags = [], warnings = [], match, mbps = 0;
+        if (/(?:2160p|\b4k\b|\buhd\b)/i.test(text)) tags.push('4K');
+        else if (/1080p/i.test(text)) tags.push('1080p');
+        else if (/720p/i.test(text)) tags.push('720p');
+        if (/(?:hevc|h[ .-]?265|x265)/i.test(text)) tags.push('HEVC');
+        else if (/(?:avc|h[ .-]?264|x264)/i.test(text)) tags.push('H.264');
+        if (/(?:\bdv\b|\bdovi\b|dolby[ .-]?vision)/i.test(text)) {
+            tags.push('Dolby Vision'); warnings.push('Dolby Vision is unsupported on this TV. A hybrid file may have an HDR10 base layer; prefer HDR10 or SDR.');
+        }
+        if (/hdr10\+/i.test(text)) tags.push('HDR10+');
+        else if (/hdr10|\bhdr\b/i.test(text)) tags.push('HDR');
+        match = text.match(/(\d+(?:[.,]\d+)?)\s*(?:mbps|mbit\/s|mb\/s)\b/i);
+        if (match) { mbps = Number(match[1].replace(',', '.')); tags.push(mbps + ' Mbps'); }
+        if (hints.videoSize > 0) tags.push((hints.videoSize / 1000000000).toFixed(1) + ' GB');
+        else { match = text.match(/\b(\d+(?:[.,]\d+)?)\s*(gb|gib)\b/i); if (match) tags.push(match[1] + ' ' + match[2].toUpperCase()); }
+        if (mbps >= 20) warnings.push('Higher bitrate: needs steady bandwidth with room for peaks. Try a lower-bitrate source if it buffers.');
+        return {tags: tags, warnings: warnings, mbps: mbps};
+    }
     function subtitleCues(text) {
         var blocks = String(text).replace(/\r/g, '').split(/\n\s*\n/), cues = [];
         function seconds(s) { var parts = s.replace(',', '.').split(':'); return parts.reduce(function (a, p) { return a * 60 + Number(p); }, 0); }
@@ -83,5 +103,5 @@
         return cues;
     }
     return {manifestURL: manifestURL, resourceURL: resourceURL, supports: supports, catalogs: catalogs,
-        catalogExtra: catalogExtra, uniqueMetas: uniqueMetas, playable: playable, sortVideos: sortVideos, subtitleCues: subtitleCues};
+        catalogExtra: catalogExtra, uniqueMetas: uniqueMetas, playable: playable, sortVideos: sortVideos, streamInfo: streamInfo, subtitleCues: subtitleCues};
 }));
