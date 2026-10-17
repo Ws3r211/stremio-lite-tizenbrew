@@ -8,7 +8,7 @@
         id: 'com.linvo.cinemeta', name: 'Cinemeta', types: ['movie', 'series'], resources: ['catalog', 'meta'],
         catalogs: [{id: 'top', type: 'movie', name: 'Movies', extra: [{name: 'search'}, {name: 'skip'}]}, {id: 'top', type: 'series', name: 'Series', extra: [{name: 'search'}, {name: 'skip'}]}]
     }};
-    var session = null, epoch = 0, currentPage = null, previous = [], linkTimer = null;
+    var session = null, serviceVersion = '', epoch = 0, currentPage = null, previous = [], linkTimer = null;
     var playback = null, playbackEpoch = 0, cues = [], barTimer = null, subtitleTimer = null;
     function read(key, fallback) { try { return JSON.parse(localStorage.getItem('sl.' + key)) || fallback; } catch (e) { return fallback; } }
     function save(key, value) { try { localStorage.setItem('sl.' + key, JSON.stringify(value)); } catch (e) { status('TV storage is full; settings could not be saved.'); } }
@@ -34,19 +34,36 @@
         Object.keys(headers || {}).forEach(function (key) { x.setRequestHeader(key, headers[key]); });
         if (body !== null && body !== undefined) x.setRequestHeader('Content-Type', 'application/json');
         x.onload = function () {
-            if (x.status < 200 || x.status >= 300) return cb(new Error('HTTP ' + x.status + '. Check the addon or network connection.'));
+            if (x.status < 200 || x.status >= 300) {
+                var detail = '', err;
+                if (target === SERVICE + '/request') {
+                    try { detail = JSON.parse(x.responseText).error || ''; } catch (ignored) {}
+                }
+                err = new Error('HTTP ' + x.status + (typeof detail === 'string' && detail ? ': ' + detail : '. The provider could not complete this request.'));
+                err.status = x.status; return cb(err);
+            }
             if (text) return cb(null, x.responseText);
             try { var data = JSON.parse(x.responseText); } catch (e) { return cb(new Error('The server returned invalid JSON.')); }
             cb(null, data);
         };
-        x.onerror = x.ontimeout = function () { cb(new Error('Network request failed. Check connectivity, certificate compatibility, or addon availability.')); };
+        x.onerror = x.ontimeout = function () { var err = new Error('Network request failed. Check connectivity, certificate compatibility, or addon availability.'); err.status = 0; cb(err); };
         x.send(body === null || body === undefined ? null : JSON.stringify(body));
     }
     function request(target, body, cb, text) {
         var method = body === null ? 'GET' : 'POST';
         if (!session) return xhr(method, target, body, cb, text);
         xhr('POST', SERVICE + '/request', {url: target, method: method, body: body, format: text ? 'text' : 'json'}, function (err, response) {
-            if (err) return cb(err);
+            if (err) {
+                // Addon GETs can use the browser's network stack when the old service fails.
+                // Account POSTs are never replayed through this fallback.
+                if (method === 'GET' && (err.status === 502 || err.status === 0)) {
+                    return xhr('GET', target, null, function (directError, data) {
+                        if (directError) return cb(new Error(err.message + ' Browser fallback: ' + directError.message));
+                        cb(null, data);
+                    }, text);
+                }
+                return cb(err);
+            }
             if (response.error) return cb(new Error(response.error));
             cb(null, text ? response.text : response.data);
         }, false, {'X-Stremio-Lite': session});
@@ -108,7 +125,12 @@
             status('Loading catalog…');
             request(C.resourceURL(choice.addon, 'catalog', c.type, c.id, skip ? {skip: skip} : {}), null, function (err, data) {
                 if (epoch !== mine) return;
-                if (err) { status(err.message, true); if (more) more.disabled = false; return; }
+                if (err) {
+                    status(choice.addon.manifest.name + ': ' + err.message, true);
+                    if (more) more.disabled = false;
+                    else if (!append) { results.textContent = ''; button('Retry catalog', function () { load(false); }, results); }
+                    return;
+                }
                 var metas = data.metas || []; fetched = fetched.concat(metas); skip += metas.length;
                 results.textContent = ''; cards(fetched, results);
                 more = null;
@@ -298,8 +320,9 @@
         button('Play test video', function () {
             play({url: 'https://media.w3.org/2010/05/bunny/trailer.mp4'}, {type: 'movie', id: 'blender-bbb', name: 'Big Buck Bunny'}, 'blender-bbb', 'Big Buck Bunny · playback test');
         }, testBox);
-        message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service connected' : 'direct requests; local service unavailable'), false, testBox);
-        focusFirst(); status('Stremio Lite 0.1.0 · unofficial client for older TVs');
+        message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
+        if (session && serviceVersion !== '0.1.1') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        focusFirst(); status('Stremio Lite 0.1.1 · unofficial client for older TVs');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
@@ -482,7 +505,7 @@
     try { ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaRewind', 'MediaFastForward'].forEach(function (key) { tizen.tvinputdevice.registerKey(key); }); } catch (e) {}
     function start(attempt) {
         xhr('GET', SERVICE + '/health', null, function (err, data) {
-            if (!err && data && data.token) session = data.token;
+            if (!err && data && data.token) { session = data.token; serviceVersion = data.version || 'unknown'; }
             else if (attempt < 3) return setTimeout(function () { start(attempt + 1); }, 600);
             home();
         });
