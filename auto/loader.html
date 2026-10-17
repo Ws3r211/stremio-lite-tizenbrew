@@ -1,0 +1,10 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Stremio Lite</title>
+<style>html,body{margin:0;background:#0c1422;color:#f4f4fb;font:24px Arial,sans-serif}main{max-width:800px;margin:16vh auto;padding:36px}h1{font-size:44px}p{color:#becae0;line-height:1.6}button{font:inherit;background:#7155bb;color:#fff;border:3px solid transparent;border-radius:10px;padding:14px 24px}button:focus{border-color:#e3d8ff;outline:3px solid #9b83ff}.hidden{display:none}</style></head>
+<body><main><h1>Stremio Lite</h1><p id="message" role="status">Opening your app and checking for updates…</p><button id="retry" class="hidden">Try again</button></main>
+<script>
+(function(){'use strict';var base='http://127.0.0.1:17780',tries=0;
+function fail(){document.getElementById('message').textContent='The app service could not start. Fully restart the TV if you just installed the automatic-update module, then open this same entry again.';document.getElementById('retry').className='';document.getElementById('retry').focus();}
+function request(method,route,token,cb){var x=new XMLHttpRequest();x.open(method,base+route,true);x.timeout=45000;if(token)x.setRequestHeader('X-Stremio-Auto',token);x.onload=function(){try{if(x.status!==200)throw new Error();cb(null,JSON.parse(x.responseText));}catch(e){cb(e);}};x.onerror=x.ontimeout=function(){cb(new Error());};x.send(null);}
+function start(){document.getElementById('retry').className='hidden';request('GET','/auto/status',null,function(err,data){if(err){if(tries++<5)return setTimeout(start,800);return fail();}request('POST','/auto/launch',data.token,function(error,release){if(error||!release.html)return fail();document.open();document.write(release.html);document.close();});});}
+document.getElementById('retry').onclick=function(){tries=0;start();};start();}());
+</script></body></html>
