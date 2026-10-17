@@ -51,13 +51,36 @@
         return list;
     }
     function uniqueMetas(items) {
-        var seen = {};
-        return items.filter(function (x) {
+        var seen = {}, out = [];
+        function quality(x) {
+            return (/^https?:\/\//i.test(x.poster || '') ? 4 : 0) + (x.description ? 2 : 0) + (x.releaseInfo || x.year ? 1 : 0);
+        }
+        items.forEach(function (x) {
             if (!x || !x.id || !x.type || !x.name) return false;
-            var key = x.type + ':' + x.id;
-            if (seen[key]) return false;
-            seen[key] = true; return true;
+            var key = '$' + x.type + ':' + x.id, item = seen[key], k, replace;
+            if (!item) { item = {}; seen[key] = item; out.push(item); }
+            replace = quality(x) > quality(item);
+            for (k in x) if (Object.prototype.hasOwnProperty.call(x, k) && k !== '__proto__' && k !== '_slSources' && x[k] !== null && x[k] !== undefined && x[k] !== '') {
+                if (replace || item[k] === null || item[k] === undefined || item[k] === '') item[k] = x[k];
+            }
+            if (Array.isArray(x._slSources)) {
+                if (!item._slSources) item._slSources = [];
+                x._slSources.forEach(function (name) { if (typeof name === 'string' && item._slSources.indexOf(name) < 0) item._slSources.push(name); });
+            }
         });
+        return out;
+    }
+    function typeLabel(type) {
+        var labels = {movie: 'Movie', series: 'TV show', video: 'Video', tv: 'Live TV', channel: 'Channel', library: 'Library item'};
+        return Object.prototype.hasOwnProperty.call(labels, type) ? labels[type] : 'Other';
+    }
+    function releaseDetails(value, now) {
+        if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value)) return {label: 'Release date not provided', upcoming: false};
+        var day = value.slice(0, 10), date = new Date(day + 'T00:00:00Z');
+        if (!isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== day) return {label: 'Release date not provided', upcoming: false};
+        var current = new Date(now === undefined ? Date.now() : now).toISOString().slice(0, 10);
+        var parts = day.split('-'), text = Number(parts[2]) + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(parts[1]) - 1] + ' ' + parts[0];
+        return {label: (day > current ? 'Upcoming · ' : 'Released · ') + text, upcoming: day > current};
     }
     function playable(stream) {
         if (stream && /^https?:\/\//i.test(stream.url || '')) {
@@ -134,6 +157,6 @@
         return isFinite(total) ? total : null;
     }
     return {manifestURL: manifestURL, resourceURL: resourceURL, supports: supports, catalogs: catalogs, isLocalFiles: isLocalFiles,
-        catalogExtra: catalogExtra, uniqueMetas: uniqueMetas, playable: playable, sortVideos: sortVideos, streamInfo: streamInfo, subtitleCues: subtitleCues,
+        catalogExtra: catalogExtra, uniqueMetas: uniqueMetas, typeLabel: typeLabel, releaseDetails: releaseDetails, playable: playable, sortVideos: sortVideos, streamInfo: streamInfo, subtitleCues: subtitleCues,
         languageName: languageName, trackLabel: trackLabel, parseTime: parseTime};
 }));

@@ -13,6 +13,7 @@
     var catalogCache = {}, heroCache = {}, discoverState = {type: 'all', row: 0, card: 0}, discoverTick = null;
     var homeScroll = null, heroTimer = null;
     var menuSerial = 0, menuReturn = 'tracks', scrubCount = 0, scrubLast = 0;
+    var searchState = {query: '', type: 'all'};
     function read(key, fallback) { try { return JSON.parse(localStorage.getItem('sl.' + key)) || fallback; } catch (e) { return fallback; } }
     function save(key, value) { try { localStorage.setItem('sl.' + key, JSON.stringify(value)); return true; } catch (e) { status('TV storage is full; settings could not be saved.'); return false; } }
     var authKey = read('auth', ''), addons = read('addons', [CINEMETA]), library = [], progress = read('progress', {});
@@ -109,16 +110,37 @@
             if (item[0] === active) { b.className = 'active'; b.setAttribute('aria-current', 'page'); }
         });
     }
+    function inLibrary(meta) {
+        return library.some(function (item) { return item.type === meta.type && item.id === meta.id; });
+    }
+    function cardInfo(meta, b) {
+        var info = node('span', null, 'card-info');
+        info.appendChild(node('span', C.typeLabel(meta.type), 'media-kind'));
+        var year = meta.releaseInfo || meta.year;
+        if (year) info.appendChild(node('span', year, 'release-year'));
+        b.appendChild(info);
+        if (inLibrary(meta)) b.appendChild(node('span', 'In library', 'library-badge'));
+        b.setAttribute('aria-label', meta.name + ' · ' + C.typeLabel(meta.type) + (year ? ' · ' + year : '') + (inLibrary(meta) ? ' · In library' : ''));
+    }
     function cards(items, parent) {
         var grid = node('div', null, 'grid'); (parent || view).appendChild(grid);
         C.uniqueMetas(items).forEach(function (meta) {
             var b = button('', function () { details(meta); }, grid); b.className = 'card';
+            var artwork = node('span', null, 'card-artwork'); b.appendChild(artwork);
+            var fallback = node('span', null, 'poster-fallback');
+            fallback.appendChild(node('span', C.typeLabel(meta.type), 'fallback-type'));
+            fallback.appendChild(node('span', meta.name, 'fallback-title'));
+            fallback.appendChild(node('span', 'Artwork unavailable', 'fallback-note')); artwork.appendChild(fallback);
             if (/^https?:\/\//i.test(meta.poster || '')) {
-                var img = document.createElement('img'); img.src = meta.poster; img.alt = ''; b.appendChild(img);
+                var img = document.createElement('img'); img.style.visibility = 'hidden'; img.alt = ''; artwork.appendChild(img);
+                img.onload = function () { this.style.visibility = 'visible'; };
                 img.onerror = function () { this.style.display = 'none'; };
-            } else b.appendChild(node('div', meta.name.charAt(0), 'poster-fallback'));
+                img.src = meta.poster;
+            }
             b.appendChild(node('span', meta.name, 'name'));
-            b.appendChild(node('span', meta.releaseInfo || meta.year || meta.type, 'year'));
+            cardInfo(meta, b);
+            if (meta._slSources && meta._slSources.length) b.appendChild(node('span', meta._slSources.join(' · '), 'card-source'));
+            if (meta.type === 'library') b.appendChild(node('span', 'Type not provided by addon', 'card-source'));
         });
         if (!grid.children.length) message('No titles returned.', false, parent);
     }
@@ -187,13 +209,21 @@
             while (running < 2 && queue.length) queue.shift()();
         }
         function rowCards(row) {
+            if (!row.items.length) {
+                row.section.className = 'catalog-row hidden';
+                // Filters must remain reachable even when the first catalog is empty.
+                view.insertBefore(filters, shelves); filters.className = 'discover-filters empty-filters';
+                if (homeScroll) clearTimeout(discoverTick); discoverTick = setTimeout(function () { if (homeScroll) homeScroll(); }, 0);
+                return;
+            }
+            row.section.className = 'catalog-row';
             row.track.textContent = ''; var items = row.items.slice(0, row.visible);
             items.forEach(function (meta, index) {
                 var b = button('', function () { details(meta); }, row.track); b.className = 'card shelf-card';
                 b.setAttribute('data-card-index', String(index)); b.setAttribute('data-row-index', String(row.index));
                 var image = document.createElement('img'); image.alt = ''; image.setAttribute('data-src', /^https?:\/\//i.test(meta.poster || '') ? meta.poster : ''); b.appendChild(image);
                 image.onerror = function () { this.style.visibility = 'hidden'; };
-                b.appendChild(node('span', meta.name, 'name')); b.appendChild(node('span', meta.releaseInfo || meta.year || meta.type, 'year'));
+                b.appendChild(node('span', meta.name, 'name')); cardInfo(meta, b);
                 b.onfocus = function () {
                     discoverState.row = row.index; discoverState.card = index;
                     var left = b.offsetLeft, right = left + b.offsetWidth;
@@ -210,14 +240,13 @@
                     } else { row.visible += 12; loadRow(row, true); }
                 }, row.track); more.className = 'shelf-more';
             }
-            if (!items.length) message('No titles in this catalog yet.', false, row.track);
             loadImages(row);
             if (!selected && items.length) selectHero(items[0], row.choice);
             if (restore && !restored && row.index === discoverState.row && items.length) {
                 restored = true; firstFocused = true;
                 var target = row.track.querySelector('[data-card-index="' + Math.min(discoverState.card, items.length - 1) + '"]');
                 target.focus(); ensureVisible(target);
-            } else if (!restore && !firstFocused && row.index === 0 && items.length) { firstFocused = true; row.track.querySelector('.card').focus(); }
+            } else if (!firstFocused && items.length && (!restore || !rows[discoverState.row] || !rows[discoverState.row].items.length)) { firstFocused = true; row.track.querySelector('.card').focus(); }
         }
         function loadImages(row) {
             var r = row.section.getBoundingClientRect(); if (r.top > window.innerHeight + 200 || r.bottom < 0) return;
@@ -253,6 +282,7 @@
                         rowCards(row); status('Your catalogs, together.');
                     }
                     pump();
+                    if (homeScroll) homeScroll();
                 });
             });
             pump();
@@ -277,12 +307,22 @@
         homeScroll = function () {
             if (epoch !== mine || playback) return;
             rows.forEach(function (row) {
+                if (row.loaded && !row.items.length) return;
                 var rect = row.section.getBoundingClientRect();
                 if (rect.top < window.innerHeight + 360 && rect.bottom > 0) {
                     if (!row.loaded && !row.loading && !row.failed) loadRow(row);
                     else loadImages(row);
                 }
             });
+        };
+        var scrollCatalogs = homeScroll;
+        homeScroll = function () {
+            scrollCatalogs();
+            if (rows.length && rows.every(function (r) { return r.loaded && !r.items.length; }) && !shelves.querySelector('.empty-catalogs')) {
+                var empty = node('div', null, 'empty-catalogs'); shelves.appendChild(empty);
+                message('Your catalogs have no titles right now. Try another content type or check your addon configuration.', false, empty);
+                button('Catalog settings', settings, empty); focusFirst(empty);
+            }
         };
         if (!choices.length) {
             filters.className += ' empty-filters';
@@ -295,25 +335,64 @@
     }
     function searchPage() {
         nav('Search'); var mine = begin('Search', searchPage), form = node('form', null, 'toolbar');
+        view.className = 'search-view';
         var input = document.createElement('input'); input.type = 'search'; input.placeholder = 'Movie or series title'; input.setAttribute('aria-label', 'Search titles');
+        input.value = searchState.query;
         form.appendChild(input); var submit = node('button', 'Search'); submit.type = 'submit'; form.appendChild(submit); view.appendChild(form);
         var results = node('div'); view.appendChild(results);
         form.onsubmit = function (event) {
             event.preventDefault(); var query = input.value.replace(/^\s+|\s+$/g, ''); if (!query) return;
-            mine = ++epoch; results.textContent = ''; var choices = C.catalogs(addons, true), pending = choices.length, found = [], failures = 0;
-            if (!pending) return message('Your addons do not provide a searchable catalog.', true, results);
+            if (query !== searchState.query) searchState.type = 'all'; searchState.query = query;
+            mine = ++epoch; var searchEpoch = mine; results.textContent = ''; var choices = C.catalogs(addons, true), pending = choices.length + (authKey ? 1 : 0), batches = [], failures = 0, libraryFailed = false;
+            if (!choices.length) return message('Your addons do not provide a searchable catalog.', true, results);
             status('Searching…'); submit.disabled = true;
-            choices.forEach(function (choice) {
+            function finish() {
+                if (epoch !== searchEpoch || --pending) return;
+                submit.disabled = false;
+                var found = C.uniqueMetas([].concat.apply([], batches));
+                function rank(meta) {
+                    var name = String(meta.name).toLowerCase(), q = query.toLowerCase();
+                    return (meta.type === 'library' ? 10 : 0) + (name === q ? 0 : name.indexOf(q) === 0 ? 1 : 2);
+                }
+                found = found.map(function (meta, index) { return {meta: meta, index: index}; }).sort(function (a, b) { return rank(a.meta) - rank(b.meta) || a.index - b.index; }).map(function (entry) { return entry.meta; });
+                var filters = node('div', null, 'search-filters'); filters.setAttribute('role', 'group'); filters.setAttribute('aria-label', 'Search content type'); results.appendChild(filters);
+                var summary = node('p', '', 'search-summary'); results.appendChild(summary);
+                if (libraryFailed) message('Library status unavailable. Results are still shown; library badges could not be refreshed.', false, results);
+                var list = node('div'); results.appendChild(list);
+                var types = [['all', 'All'], ['movie', 'Movies'], ['series', 'TV shows'], ['video', 'Videos'], ['tv', 'Live TV'], ['other', 'Other / library items']], switches = [];
+                function matches(meta, type) { return type === 'all' || (type === 'other' ? ['movie', 'series', 'video', 'tv'].indexOf(meta.type) < 0 : meta.type === type); }
+                if (!found.some(function (meta) { return matches(meta, searchState.type); })) searchState.type = 'all';
+                function paint() {
+                    list.textContent = ''; var shown = found.filter(function (meta) { return matches(meta, searchState.type); });
+                    switches.forEach(function (entry) { var selected = searchState.type === entry.type; entry.button.className = selected ? 'selected' : ''; entry.button.setAttribute('aria-pressed', String(selected)); });
+                    summary.textContent = shown.length + (shown.length === 1 ? ' result' : ' results') + ' for “' + query + '”' + (searchState.type !== 'all' ? ' · ' + types.filter(function (t) { return t[0] === searchState.type; })[0][1] : '');
+                    cards(shown, list);
+                    status(found.length + ' results' + (failures ? ' · ' + failures + ' catalog requests failed' : ''));
+                }
+                types.forEach(function (entry) {
+                    var count = found.filter(function (meta) { return matches(meta, entry[0]); }).length;
+                    if (!count && entry[0] !== 'all') return;
+                    var b = button(entry[1] + ' (' + count + ')', function () { searchState.type = entry[0]; paint(); }, filters);
+                    switches.push({type: entry[0], button: b});
+                });
+                paint(); focusFirst(list);
+            }
+            choices.forEach(function (choice, index) {
                 request(C.resourceURL(choice.addon, 'catalog', choice.catalog.type, choice.catalog.id, {search: query}), null, function (err, data) {
-                    if (epoch !== mine) return;
-                    if (err) failures++; else found = found.concat(data.metas || []);
-                    if (--pending) return;
-                    submit.disabled = false; cards(found, results); focusFirst(results);
-                    status(C.uniqueMetas(found).length + ' results' + (failures ? ' · ' + failures + ' catalog requests failed' : ''));
+                    if (epoch !== searchEpoch) return;
+                    if (err) failures++; else batches[index] = (data && Array.isArray(data.metas) ? data.metas : []).map(function (meta) {
+                        if (!meta || typeof meta !== 'object') return null;
+                        var copy = {}, k; for (k in meta) if (Object.prototype.hasOwnProperty.call(meta, k) && k !== '__proto__') copy[k] = meta[k];
+                        if (!copy.type) copy.type = choice.catalog.type;
+                        copy._slSources = [String(choice.addon.manifest.name || 'Addon').slice(0, 80)]; return copy;
+                    });
+                    finish();
                 });
             });
+            if (authKey) loadLibrary(function (err) { if (epoch !== searchEpoch) return; libraryFailed = !!err; finish(); });
         };
         input.focus();
+        if (searchState.query) form.onsubmit({preventDefault: function () {}});
     }
     function details(meta) {
         function render() {
@@ -325,7 +404,8 @@
             button('Back', goBack, actions);
             function content(item) {
                 if (epoch !== mine) return; text.textContent = ''; message(item.description || 'No description provided.', false, text);
-                message([item.releaseInfo, item.runtime, (item.genres || []).join(', ')].filter(Boolean).join(' · '), false, text);
+                message([C.typeLabel(item.type), item.releaseInfo || item.year, item.runtime, item.imdbRating ? 'IMDb ' + item.imdbRating : '', (item.genres || []).join(', ')].filter(Boolean).join(' · '), false, text);
+                if (item.released) message(C.releaseDetails(item.released).label, false, text);
                 while (actions.children.length > 1) actions.removeChild(actions.lastChild);
                 if (item.type === 'series' || item.type === 'tv') {
                     var videos = C.sortVideos(item.videos), seasons = [];
@@ -337,7 +417,12 @@
                     function episodes() {
                         list.textContent = '';
                         videos.filter(function (v) { return Number(v.season || 0) === Number(season.value); }).forEach(function (v) {
-                            button((v.episode !== undefined ? v.episode + '. ' : '') + (v.title || v.name || v.id), function () { streams(item, v.id, v.title || v.name || item.name); }, list);
+                            var release = C.releaseDetails(v.released);
+                            var episode = button('', function () { streams(item, v.id, v.title || v.name || item.name); }, list); episode.className = 'episode-row';
+                            episode.appendChild(node('span', (v.episode !== undefined ? v.episode + '. ' : '') + (v.title || v.name || 'Episode'), 'episode-title'));
+                            episode.appendChild(node('span', release.label, release.upcoming ? 'episode-release upcoming' : 'episode-release'));
+                            if (v.overview) episode.appendChild(node('span', v.overview, 'episode-overview'));
+                            if (release.upcoming) episode.appendChild(node('span', 'Scheduled date from addon; streams may not be available yet.', 'episode-note'));
                         });
                     }
                     season.onchange = episodes; episodes();
@@ -349,7 +434,10 @@
                 if (epoch !== mine) return;
                 if (i >= providers.length) return content(meta);
                 request(C.resourceURL(providers[i++], 'meta', meta.type, meta.id), null, function (err, data) {
-                    if (err || !data.meta) return next(); content(data.meta);
+                    if (err || !data.meta) return next();
+                    var full = {}, k; for (k in meta) if (Object.prototype.hasOwnProperty.call(meta, k) && k !== '__proto__') full[k] = meta[k];
+                    for (k in data.meta) if (Object.prototype.hasOwnProperty.call(data.meta, k) && k !== '__proto__' && data.meta[k] !== null && data.meta[k] !== '') full[k] = data.meta[k];
+                    content(full);
                 });
             }
             next();
@@ -541,8 +629,8 @@
             play({url: 'https://media.w3.org/2010/05/bunny/trailer.mp4'}, {type: 'movie', id: 'blender-bbb', name: 'Big Buck Bunny'}, 'blender-bbb', 'Big Buck Bunny · playback test');
         }, testBox);
         message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
-        if (session && serviceVersion !== '3.0.0') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
-        focusFirst(); status('Stremio Lite 3.0.0 · unofficial client for older TVs');
+        if (session && serviceVersion !== '3.0.1') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        focusFirst(); status('Stremio Lite 3.0.1 · unofficial client for older TVs');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
@@ -569,7 +657,7 @@
         if (!playback) return;
         var range = document.getElementById('timeline'), duration = playback.duration, known = isFinite(duration) && duration > 0;
         var seconds = playback.scrub === null ? playback.seconds : playback.scrub;
-        var busy = playback.preparing || playback.seeking;
+        var busy = playback.preparing || playback.seeking || playback.failed;
         range.disabled = !known || busy;
         ['audio', 'tracks', 'pause'].forEach(function (id) { document.getElementById(id).disabled = busy; });
         ['jump', 'rewind', 'forward'].forEach(function (id) { document.getElementById(id).disabled = busy || !known; });
@@ -591,6 +679,10 @@
     }
     function updateTime(seconds, duration) {
         if (!playback) return;
+        if (seconds > playback.seconds + 0.05) {
+            playback.lastProgressAt = Date.now();
+            if (playback.buffering && !playback.preparing && !playback.seeking && !playback.paused && !playback.failed) playbackStatus('Playing');
+        }
         playback.seconds = seconds; playback.duration = duration;
         paintTimeline();
         if (seconds - playback.lastSaved > 10) { storeProgress(); playback.lastSaved = seconds; }
@@ -613,10 +705,12 @@
             if (playback && !playback.paused && !playback.preparing && !playback.seeking && !playback.buffering && !playback.failed && playback.scrub === null && document.getElementById('track-menu').className === 'hidden') document.getElementById('player-chrome').className = 'hidden';
         }, 6000);
     }
-    function play(stream, meta, id, title) {
+    function play(stream, meta, id, title, startOver) {
         var can = C.playable(stream); if (!can.ok) return status(can.reason, true);
         if (playback) stopPlayback(); var generation = ++playbackEpoch, av = nativePlayer(), video = document.getElementById('video');
         playback = {id: id, meta: meta, stream: stream, seconds: 0, duration: 0, lastSaved: 0, native: !!av, paused: false, preparing: true, stalls: 0, bufferEvents: 0, lastUISecond: -1, scrub: null, subtitleOffset: Number(read('subtitleOffset', 0)) || 0, subtitleChoice: 'default', subtitleSources: [], seeking: false, returnFocus: document.activeElement, returnScroll: window.pageYOffset};
+        playback.lastProgressAt = Date.now();
+        document.documentElement.className = av ? 'native-playing' : '';
         window.scrollTo(0, 0);
         document.body.className = 'playing'; document.getElementById('player').className = '';
         document.getElementById('playing-title').textContent = title; document.getElementById('track-menu').className = 'hidden';
@@ -627,15 +721,27 @@
         document.getElementById('buffered-progress').style.width = '0%'; document.getElementById('buffer-progress').removeAttribute('value');
         paintPause(); paintTimeline();
         playbackStatus('Preparing video…'); showBar(); document.getElementById('pause').focus();
-        var resume = progress[id], resumeAt = resume && resume.seconds > 10 && resume.seconds < resume.duration - 20 ? resume.seconds : 0;
-        function active() { return playback && generation === playbackEpoch; }
+        var resume = progress[id], resumeAt = !startOver && resume && resume.seconds > 10 && resume.seconds < resume.duration - 20 ? resume.seconds : 0;
+        document.getElementById('player-retry').onclick = function () { play(stream, meta, id, title, true); };
+        document.getElementById('player-retry').className = 'hidden';
+        function active() { return playback && generation === playbackEpoch && !playback.failed; }
         function failed(error) {
             if (!active()) return;
             var code = typeof error === 'string' ? error : error && (typeof error.code === 'string' ? error.code : error.name);
             code = /^[A-Za-z][A-Za-z0-9_]{2,70}$/.test(String(code || '')) ? ' (' + code + ')' : '';
-            showBar(); playbackStatus('Playback failed' + code + '. Try a lower-bitrate source without Dolby Vision. Return stops the player.');
+            clearTimeout(playback.startTimer); clearTimeout(playback.seekTimer); clearInterval(playback.watchTimer);
+            playback.preparing = false; playback.seeking = false;
+            var timeout = /TIMEOUT/.test(code);
+            showBar(); playbackStatus('Playback failed' + code + (timeout ? '. The source stopped responding. Retry from the beginning or choose another source.' : '. Try a lower-bitrate source without Dolby Vision. Return stops the player.'));
+            paintTimeline(); document.getElementById('player-retry').className = '';
+            if (playback.native) { try { av.stop(); } catch (failedStop) {} try { av.close(); } catch (failedClose) {} }
+            else video.pause();
             document.getElementById('player-error-back').focus();
         }
+        playback.watchTimer = setInterval(function () {
+            if (!active() || playback.paused || playback.seeking) return;
+            if (Date.now() - playback.lastProgressAt > (playback.preparing ? 90000 : 60000)) failed(playback.preparing ? 'STARTUP_TIMEOUT' : 'BUFFERING_TIMEOUT');
+        }, 1000);
         function buffering(percent) {
             if (!active()) return;
             if (percent === undefined) { playback.bufferEvents++; if (!playback.preparing) playback.stalls++; }
@@ -645,7 +751,7 @@
         }
         if (av) {
             video.className = 'hidden'; document.getElementById('av-player').className = '';
-            var mode = read('bufferMode', 'default'), attempt = 0, retried = false;
+            var mode = read('bufferMode', 'default'), attempt = 0, retried = false, retriedResume = false;
             if (['balanced', 'steady', 'default'].indexOf(mode) < 0) mode = 'default';
             var openNative = function (useCustomBuffer) {
                 if (!active()) return;
@@ -653,6 +759,7 @@
                 function current() { return active() && thisAttempt === attempt; }
                 function nativeFailed(error) {
                     if (!current() || handlingFailure) return; handlingFailure = true;
+                    clearTimeout(playback.startTimer);
                     if (!started && useCustomBuffer && !retried) {
                         retried = true; ++attempt;
                         playbackStatus('Retrying with TV default buffering…');
@@ -664,9 +771,11 @@
                 }
                 function startNative() {
                     if (!current() || started || handlingFailure) return;
+                    clearTimeout(playback.startTimer);
                     try {
                         av.play(); if (!current() || handlingFailure) return;
                         started = true; playback.preparing = false;
+                        playback.lastProgressAt = Date.now();
                         playbackStatus(retried ? 'Playing · TV default buffering' : 'Playing');
                         try { updateTime(resumeAt || 0, av.getDuration() / 1000); } catch (timeError) {}
                         paintPause(); showBar();
@@ -683,7 +792,7 @@
                 }
                 av.setListener({onbufferingstart: function () { if (current()) buffering(); },
                     onbufferingprogress: function (p) { if (current()) buffering(p); },
-                    onbufferingcomplete: function () { if (current()) playbackStatus(playback.preparing ? 'Preparing video…' : 'Playing'); },
+                    onbufferingcomplete: function () { if (current() && !playback.seeking) playbackStatus(playback.preparing ? 'Preparing video…' : playback.paused ? 'Paused' : 'Playing'); },
                     oncurrentplaytime: function (ms) {
                         if (!current()) return;
                         // Avoid multiple layout/storage/subtitle scans per frame on older TVs.
@@ -696,11 +805,22 @@
                         var stripped = String(text || '').replace(/<[^>]*>/g, ''); document.getElementById('subtitle').textContent = stripped;
                         clearTimeout(subtitleTimer); subtitleTimer = setTimeout(function () { if (current()) document.getElementById('subtitle').textContent = ''; }, Number(duration) || 3000);
                     }});
+                playback.startTimer = setTimeout(function () { nativeFailed('STARTUP_TIMEOUT'); }, 45000);
                 av.prepareAsync(function () {
                     if (!current() || handlingFailure) return;
+                    clearTimeout(playback.startTimer);
                     if (resumeAt) {
                         playbackStatus('Resuming video…');
-                        try { av.seekTo(resumeAt * 1000, startNative, startNative); } catch (seekError) { startNative(); }
+                        playback.startTimer = setTimeout(function () {
+                            if (!current() || handlingFailure || retriedResume) return;
+                            retriedResume = true; handlingFailure = true; ++attempt; resumeAt = 0;
+                            playbackStatus('Retrying from the beginning · resume did not respond…');
+                            try { av.stop(); } catch (stopResumeError) {}
+                            try { av.close(); } catch (closeResumeError) {}
+                            openNative(false);
+                        }, 15000);
+                        function resumeFailed() { resumeAt = 0; startNative(); }
+                        try { av.seekTo(resumeAt * 1000, startNative, resumeFailed); } catch (seekError) { resumeFailed(); }
                     } else startNative();
                 }, nativeFailed);
                 } catch (error) { nativeFailed(error); }
@@ -722,28 +842,29 @@
         }
     }
     function stopPlayback() {
-        if (!playback) return; storeProgress(); if (playback.seekTimer) clearTimeout(playback.seekTimer); var wasNative = playback.native, returnFocus = playback.returnFocus, returnScroll = playback.returnScroll; playback = null; ++playbackEpoch; ++menuSerial;
+        if (!playback) return; storeProgress(); clearTimeout(playback.startTimer); clearTimeout(playback.seekTimer); clearInterval(playback.watchTimer); var wasNative = playback.native, returnFocus = playback.returnFocus, returnScroll = playback.returnScroll; playback = null; ++playbackEpoch; ++menuSerial;
         if (barTimer) clearTimeout(barTimer); if (subtitleTimer) clearTimeout(subtitleTimer);
         if (wasNative) { try { nativePlayer().stop(); } catch (e) {} try { nativePlayer().close(); } catch (e) {} }
         var video = document.getElementById('video'); video.onended = video.onerror = video.onplaying = video.ontimeupdate = video.onloadedmetadata = video.onwaiting = video.onprogress = video.onseeked = null;
         video.pause(); video.removeAttribute('src'); video.load(); cues = [];
         document.getElementById('player').className = 'hidden'; document.getElementById('track-menu').className = 'hidden'; document.getElementById('track-scrim').className = 'hidden'; document.body.className = '';
+        document.documentElement.className = '';
         document.getElementById('subtitle').textContent = '';
         window.scrollTo(0, returnScroll || 0);
         if (returnFocus && document.body.contains(returnFocus) && !returnFocus.disabled) returnFocus.focus(); else focusFirst();
     }
     function togglePause(force) {
-        if (!playback || playback.preparing || playback.seeking) return; var paused = force === undefined ? !playback.paused : force;
+        if (!playback || playback.preparing || playback.seeking || playback.failed) return; var paused = force === undefined ? !playback.paused : force;
         try { if (playback.native) nativePlayer()[paused ? 'pause' : 'play']();
             else if (paused) document.getElementById('video').pause(); else document.getElementById('video').play();
-            playback.paused = paused; playbackStatus(paused ? 'Paused' : 'Playing'); paintPause(); showBar();
+            playback.paused = paused; playback.lastProgressAt = Date.now(); playbackStatus(paused ? 'Paused' : 'Playing'); paintPause(); showBar();
         } catch (e) { playbackStatus('Player is not ready.'); }
     }
     function seek(delta) {
         if (playback) seekToSeconds(playback.seconds + delta);
     }
     function seekToSeconds(target) {
-        if (!playback || playback.preparing || playback.seeking || !isFinite(playback.duration) || playback.duration <= 0) return false;
+        if (!playback || playback.preparing || playback.seeking || playback.failed || !isFinite(playback.duration) || playback.duration <= 0) return false;
         target = Math.max(0, Math.min(playback.duration - 1, target));
         var mine = playbackEpoch, settled = false, seekFocus = document.activeElement; playback.seeking = true; playback.scrub = null; scrubCount = 0; paintTimeline();
         playbackStatus('Seeking to ' + formatTime(target) + '…'); showBar();
@@ -758,6 +879,7 @@
             if (!finish()) return;
             updateTime(target, playback.duration);
             playbackStatus(playback.paused ? 'Paused' : 'Playing'); showBar();
+            playback.lastProgressAt = Date.now();
         }
         function error() {
             if (!finish()) return;
