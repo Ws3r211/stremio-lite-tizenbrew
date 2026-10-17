@@ -18,7 +18,7 @@ async function run(browser, existingServer) {
         window.avCalls=[];
         window.webapis={avplay:{
             open(u){window.avCalls.push(['open',u]);},setDisplayRect(){},setListener(l){window.avListener=l;},
-            prepareAsync(ok){setTimeout(ok,80);},play(){window.avCalls.push(['play']);},pause(){window.avCalls.push(['pause']);},
+            setBufferingParam(option,unit,amount){window.avCalls.push(['buffer',option,unit,amount]);},setTimeoutForBuffering(seconds){window.avCalls.push(['timeout',seconds]);},prepareAsync(ok){window.avCalls.push(['prepare']);setTimeout(ok,80);},play(){window.avCalls.push(['play']);},pause(){window.avCalls.push(['pause']);},
             stop(){window.avCalls.push(['stop']);},close(){window.avCalls.push(['close']);},seekTo(ms){window.avCalls.push(['seek',ms]);},
             getDuration(){return 120000;},getTotalTrackInfo(){return [{type:'AUDIO',index:0},{type:'TEXT',index:1}];},
             setSilentSubtitle(){},setSelectTrack(type,index){window.avCalls.push(['track',type,index]);}
@@ -43,7 +43,7 @@ async function run(browser, existingServer) {
     });
     try{
         await page.goto('http://127.0.0.1:17780/');
-        await page.getByRole('button',{name:'Fixture Movie'}).waitFor();
+        await page.getByRole('button',{name:'Fixture Movie'}).first().waitFor();
         assert.equal(await page.evaluate(()=>typeof WebAssembly),'undefined');
         await page.keyboard.press('ArrowRight');
         assert.match(await page.evaluate(()=>document.activeElement.textContent),/Fixture Series/);
@@ -55,7 +55,7 @@ async function run(browser, existingServer) {
         await page.keyboard.press('ArrowDown');
         assert.equal(await page.evaluate(()=>document.activeElement.tagName),'BUTTON');
         await page.getByRole('button',{name:'Search',exact:true}).last().click();
-        await page.getByRole('button',{name:'Fixture Movie'}).waitFor();
+        await page.getByRole('button',{name:'Fixture Movie'}).first().waitFor();
         assert(calls.some(x=>x.url.includes('search=A%20%26%20B')));
         await page.getByRole('button',{name:'Settings',exact:true}).click();
         await page.getByRole('button',{name:'Sign in with Stremio'}).click();
@@ -63,12 +63,16 @@ async function run(browser, existingServer) {
         await page.getByRole('button',{name:'Refresh account addons'}).waitFor({timeout:10000});
         assert(calls.some(x=>x.url.endsWith('/addonCollectionGet')&&x.body.authKey==='synthetic-test-token'));
         await page.getByRole('button',{name:'Library',exact:true}).click();
-        await page.getByRole('button',{name:'Fixture Movie'}).click();
+        await page.getByRole('button',{name:'Fixture Movie'}).first().click();
         await page.getByRole('button',{name:'Find streams'}).click();
         await page.getByRole('button',{name:/Torrent fixture/}).click();
         assert.match(await page.locator('#status').textContent(),/Torrent source/);
         await page.getByRole('button',{name:/HTTP fixture/}).click();
         await page.waitForFunction(()=>avCalls.some(x=>x[0]==='play'));
+        assert.deepEqual(await page.evaluate(()=>avCalls.filter(x=>x[0]==='buffer').map(x=>x.slice(1))),[['PLAYER_BUFFER_FOR_PLAY','PLAYER_BUFFER_SIZE_IN_SECOND',10],['PLAYER_BUFFER_FOR_RESUME','PLAYER_BUFFER_SIZE_IN_SECOND',15]]);
+        assert(await page.evaluate(()=>avCalls.findIndex(x=>x[0]==='buffer')<avCalls.findIndex(x=>x[0]==='prepare')));
+        await page.evaluate(()=>{avListener.onbufferingstart();avListener.onbufferingstart();avListener.onbufferingprogress(40);});
+        assert.match(await page.locator('#playback-status').textContent(),/Repeated pauses/);
         await page.getByRole('button',{name:'Pause / play'}).click();
         assert(await page.evaluate(()=>avCalls.some(x=>x[0]==='pause')));
         await page.getByRole('button',{name:'Subtitles / audio'}).click();
@@ -78,7 +82,7 @@ async function run(browser, existingServer) {
         assert.equal(await page.locator('#subtitle').textContent(),'Hello TV');
         await page.keyboard.press('Escape');assert(await page.locator('#player').isHidden());
         await page.getByRole('button',{name:'Discover',exact:true}).click();
-        await page.getByRole('button',{name:'Fixture Series'}).click();
+        await page.getByRole('button',{name:'Fixture Series'}).first().click();
         await page.getByRole('button',{name:'1. First',exact:true}).waitFor();
         await page.getByRole('button',{name:'1. First',exact:true}).click();
         await page.getByRole('button',{name:/HTTP fixture/}).waitFor();

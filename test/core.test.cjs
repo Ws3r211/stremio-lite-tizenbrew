@@ -43,6 +43,15 @@ test('episode order, duplicate IDs, and subtitle timestamps use protocol values'
     assert.deepEqual(C.subtitleCues('1\r\n00:01:02,500 --> 00:01:05,000\r\n<b>Hello</b>\r\n'),[{start:62.5,end:65,text:'Hello\n'}]);
     assert.equal(C.subtitleCues('WEBVTT\n\n00:02.000 --> 00:04.500\nHello')[0].end,4.5);
 });
+test('stream labels distinguish codec compatibility from bitrate and file size', () => {
+    const info=C.streamInfo({name:'4K HEVC-DV-HDR10+',description:'24GB 25.3 Mbps'});
+    assert.deepEqual(info.tags,['4K','HEVC','Dolby Vision','HDR10+','25.3 Mbps','24 GB']);
+    assert.equal(info.warnings.length,2);
+    assert.match(info.warnings[0],/hybrid.*HDR10 base/);
+    assert.equal(C.streamInfo({name:'1080p H.264',behaviorHints:{videoSize:4000000000}}).warnings.length,0);
+    assert.equal(C.streamInfo({description:'24GB'}).mbps,0);
+    assert.equal(C.streamInfo({description:'Adventure DVDRip'}).warnings.length,0);
+});
 test('service rejects foreign origins, missing session tokens, and malformed JSON', async () => {
     const server=createServer(); await new Promise(r=>server.listen(0,'127.0.0.1',r));
     const base='http://127.0.0.1:'+server.address().port;
