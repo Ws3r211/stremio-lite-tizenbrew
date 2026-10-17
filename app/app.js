@@ -869,7 +869,7 @@
         var mine = playbackEpoch, settled = false, seekFocus = document.activeElement; playback.seeking = true; playback.scrub = null; scrubCount = 0; paintTimeline();
         playbackStatus('Seeking to ' + formatTime(target) + '…'); showBar();
         function finish() {
-            if (settled || !playback || mine !== playbackEpoch) return false;
+            if (settled || !playback || playback.failed || mine !== playbackEpoch) return false;
             settled = true; clearTimeout(playback.seekTimer); playback.seekTimer = null; playback.seeking = false; paintTimeline();
             if (playback.menuFocus) { document.getElementById(playback.menuFocus).focus(); playback.menuFocus = null; }
             else if (document.activeElement === document.body && seekFocus && document.getElementById('player-chrome').contains(seekFocus) && !seekFocus.disabled) seekFocus.focus();
