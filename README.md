@@ -2,6 +2,18 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 3.0.1: search clarity, episode dates and buffering recovery
+
+Search has Movies / TV shows / Videos / Live TV / Other filters where matching results exist. Every card identifies the content type; verified account-library matches get a separate In library badge. An addon's custom `library` type is labeled Library item and is not treated as proof of account membership. Duplicate IDs of the same type merge richer metadata; different IDs are retained. Missing/broken posters show a readable fallback, and search query/filter choices survive opening a title. Search refreshes library membership using the existing read-only account endpoint.
+
+Empty Home catalog rows are hidden after a successful empty response, including cached responses. This does not change Settings preferences or suppress network failures. A later visit rechecks once the five-minute cache expires; all-empty results leave content filters and Settings accessible.
+
+Episode rows show Released / Upcoming with the supplied air date, an overview when supplied, or an explicit missing-date label. Future dates describe addon metadata and do not guarantee stream availability.
+
+Native startup has a 45-second deadline. A resume seek with no callback retries once from the beginning after 15 seconds, invalidating callbacks from the abandoned attempt. Actual advancing playback clears a stale Buffering overlay. Sixty seconds without playback progress while playing produces BUFFERING_TIMEOUT and explicit Retry from beginning / Choose another source actions; pause and seeks do not trigger this watchdog. Native playback makes both the HTML and body layers transparent. These changes avoid indefinite UI waits; provider delivery and TV codec compatibility still need on-device verification.
+
+Update with `Ws3r211/stremio-lite-tizenbrew@v3.0.1`, fully restart the TV, and check app/service 3.0.1 in Settings. Keep your existing Developer Mode IP.
+
 ## Version 3.0.0: player and catalog controls
 
 - A video timeline with remote preview scrubbing: press Up to focus it, use Left/Right to preview a position (holding accelerates), press OK to seek, and Return to cancel. Mouse/range input also works. Unknown-duration streams show a disabled timeline rather than a fake duration.
@@ -66,7 +78,7 @@ TizenBrew's current loader retrieves module files from jsDelivr using a **public
 
 1. Open TizenBrew on your TV.
 2. Open Module Manager and choose **Add GitHub Module**.
-3. Enter `Ws3r211/stremio-lite-tizenbrew@v3.0.0`. This fixed release reference avoids stale `main` caches.
+3. Enter `Ws3r211/stremio-lite-tizenbrew@v3.0.1`. This fixed release reference avoids stale `main` caches.
 4. Launch **Stremio Lite**.
 5. Check Settings. It should report that the local service is connected. Run **Play test video** and verify picture, sound, pause, seek, and Return.
 6. Select **Sign in with Stremio**, open the displayed link on your phone, and approve the device. The client then imports your existing addons.
