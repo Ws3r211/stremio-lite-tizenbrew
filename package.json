@@ -1,8 +1,8 @@
 {
   "name": "stremio-lite-tizenbrew",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
-  "description": "Unofficial Stremio-compatible client for older Samsung TVs. Hardware validation pending.",
+  "description": "Unofficial Stremio-compatible client for older Samsung TVs. ES5 client targeting Tizen 3.0.",
   "license": "MIT",
   "repository": {"type": "git", "url": "https://github.com/Ws3r211/stremio-lite-tizenbrew.git"},
   "packageType": "app",

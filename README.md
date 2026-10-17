@@ -2,6 +2,18 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 0.2.0: Discover and playback
+
+Discover now presents installed catalogs together in horizontal poster shelves, with custom catalogs first, a cinematic metadata backdrop, and All / Movies / Series filters. The layout follows the selected Editorial Discover visual direction. Real titles, descriptions, posters, and backdrops come from your addons; the concept's fictional artwork is not included. Catalogs load near the viewport with at most two catalog requests at once. Poster images load near the visible part of each shelf, and returning from a title restores the focused poster. A five-minute in-memory catalog cache avoids unnecessary requests when switching filters or returning.
+
+Samsung AVPlay now uses a 10-second initial / 15-second recovery buffer by default. Settings offers Extra buffering (15 / 20 seconds) and TV default. Unsupported buffer APIs fall back without preventing playback. The controls are configured after open and before prepare, as required by Samsung. Startup/recovery may take longer. The HTML5 fallback uses browser-managed buffering. No video proxy, transcoding, or automatic source switching is included.
+
+Stream labels now highlight resolution, codec, Dolby Vision, reported bitrate and size when supplied by the addon. These are label-based hints, not a probe of the actual media. A DV/HDR hybrid may include a playable HDR10 base layer, but Dolby Vision itself is unsupported on this Samsung. Repeated buffering suggests a lower bitrate or a different source; buffer settings cannot fix sustained bandwidth shortages or unsupported codecs. A large file is not automatically unsupported: bitrate, peaks, codec profile, delivery, and available bandwidth matter.
+
+For an initial comparison on the UE49MU7070, try a 1080p H.264/AVC source without Dolby Vision. This is a troubleshooting starting point, not the TV's maximum capability. Samsung's [2017 video specifications](https://developer.samsung.com/smarttv/develop/specifications/media-specifications/2017-tv-video-specifications.html) and [AVPlay buffer API](https://developer.samsung.com/smarttv/develop/api-references/samsung-product-api-references/avplay-api.html#AVPlayManager::setBufferingParam) describe the platform constraints. Actual source playback still requires testing on the TV.
+
+After updating, fully restart the TV so the old cached service is replaced. Settings should show app and local service **0.2.0**. Keep the existing Developer Mode IP. Do not sign out or clear browser data to update.
+
 ## Version 0.1.1 catalog fix
 
 Fixes HTTP 502 on compressed catalogs with the TV's Node 4 runtime: that runtime can emit `aborted` for a complete HTTP response while gzip decoding is still finishing. The service now checks HTTP message completeness, still rejects genuinely truncated responses, and accepts gzip and deflate. Failed service GETs also try a direct browser request; account POSTs are not replayed. Catalog errors now show the provider and underlying failure, with a Retry button. Certificate validation remains enabled.
@@ -12,7 +24,7 @@ The supplied firmware identifies Tizen 3.0. Samsung documents Chromium 47 for 20
 
 ## Features
 
-- Cinemeta catalog browsing and search, including catalogs from installed addons.
+- Combined catalog shelves, cinematic Discover artwork, content type filtering, and search across installed addons.
 - Stremio device-code sign-in on your phone or computer. No account password is entered in this client.
 - Import of account addons and library; manual addon manifest URLs also work.
 - Series and episode selection using addon-provided video IDs.
@@ -68,11 +80,13 @@ node --test test/core.test.cjs
 node test/catalog-network.test.cjs
 ```
 
-The nine protocol/service tests cover ES5 syntax, encoded episode IDs and configuration paths, resource filters, required catalog extras, unsupported streams, subtitles, local-service origin/session checks, and the TizenBrew VM launch contract.
+The protocol/service tests cover ES5 syntax, encoded episode IDs and configuration paths, resource filters, required catalog extras, stream-label hints, unsupported streams, subtitles, local-service origin/session checks, and the TizenBrew VM launch contract.
 
 Browser tests additionally need Playwright and an installed browser. `test/browser.test.cjs` uses synthetic account/addon data and a mocked AVPlay object. `test/live-smoke.cjs` explicitly accesses public Cinemeta metadata, requests an unauthenticated Stremio device code, and plays the public Blender sample on desktop. Neither test signs into a real account. Both can use `CHROME_PATH` to select an installed Chrome executable. Results in `artifacts/` distinguish desktop verification from physical-TV testing.
 
 `test/node4-smoke.js` runs with Node 4.4.3 and no npm dependencies. It tests compressed responses with connection closure, redirects, and rejected truncation; `--live` additionally fetches the public Cinemeta catalog. `test/catalog-network.test.cjs` checks browser fallback, configured catalog paths, diagnostic errors, retry, and account POST isolation with synthetic providers. A user's configured AIOMetadata instance still needs an on-TV check.
+
+`test/discover.test.cjs` checks the combined catalog layout, lazy shelves, request limits, horizontal/vertical remote navigation, focus restoration, cached filters, and cached pagination. Browser playback tests check native buffering call order and repeated-stall guidance using a mock; they cannot establish whether a particular TV stream stops stuttering.
 
 ## Source assessment and references
 

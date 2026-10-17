@@ -3,3 +3,4 @@ artifacts/
 dist/
 *.log
 tools/
+design-qa.md

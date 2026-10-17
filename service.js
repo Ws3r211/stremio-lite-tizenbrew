@@ -22,7 +22,7 @@
             try { parsed = url.parse(target); } catch (e) { return done(new Error('Invalid URL')); }
             if ((parsed.protocol !== 'https:' && parsed.protocol !== 'http:') || !parsed.hostname || parsed.auth) return done(new Error('Only HTTP(S) URLs without embedded credentials are supported.'));
             if (method !== 'GET' && !(method === 'POST' && parsed.protocol === 'https:' && parsed.hostname === 'api.strem.io' && /^\/api\/(addonCollectionGet|datastoreGet)$/.test(parsed.pathname))) return done(new Error('Unsupported request method or API endpoint.'));
-            var headers = {'Accept': 'application/json, text/plain', 'Accept-Encoding': 'gzip, deflate', 'User-Agent': 'StremioLiteTizen/0.1.1'};
+            var headers = {'Accept': 'application/json, text/plain', 'Accept-Encoding': 'gzip, deflate', 'User-Agent': 'StremioLiteTizen/0.2.0'};
             if (body) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(body); }
             var request = (parsed.protocol === 'https:' ? https : http).request({hostname: parsed.hostname, port: parsed.port,
                 path: parsed.path, method: method, headers: headers}, function (response) {
@@ -69,7 +69,7 @@
             res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Stremio-Lite');
             res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
             if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
-            if (req.url === '/health' && req.method === 'GET') return json(res, 200, {name: 'Stremio Lite', version: '0.1.1', token: token});
+            if (req.url === '/health' && req.method === 'GET') return json(res, 200, {name: 'Stremio Lite', version: '0.2.0', token: token});
             if (req.url === '/request' && req.method === 'POST') {
                 if (req.headers['x-stremio-lite'] !== token) return json(res, 403, {error: 'Session token required'});
                 var chunks = [], length = 0, tooLarge = false;
