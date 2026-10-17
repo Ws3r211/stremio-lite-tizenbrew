@@ -3,7 +3,9 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const acorn=require('acorn'),{chromium}=require('playwright'),createUpdater=require('../auto/updater.js');
 const root=path.join(__dirname,'..'),initialText=fs.readFileSync(path.join(root,'runtime.json'),'utf8'),initial={descriptor:JSON.parse(fs.readFileSync(path.join(root,'update.json'),'utf8')),text:initialText};
 const loader=fs.readFileSync(path.join(root,'auto/loader.html'),'utf8');
-function release(v){const data=JSON.parse(initialText);data.version=v;for(const key in data.files)data.files[key]=data.files[key].replace(/3\.1\.0/g,v);const text=JSON.stringify(data);return {descriptor:{schema:1,bootstrap:1,version:v,ref:'v'+v,sha256:crypto.createHash('sha256').update(text).digest('hex')},text};}
+const installedVersion=initial.descriptor.version,parts=installedVersion.split('.').map(Number);
+const nextVersion=parts[0]+'.'+parts[1]+'.'+(parts[2]+1),failedVersion=parts[0]+'.'+parts[1]+'.'+(parts[2]+2);
+function release(v){const data=JSON.parse(initialText);data.version=v;for(const key in data.files)data.files[key]=data.files[key].split(installedVersion).join(v);const text=JSON.stringify(data);return {descriptor:{schema:1,bootstrap:1,version:v,ref:'v'+v,sha256:crypto.createHash('sha256').update(text).digest('hex')},text};}
 (async()=>{
  for(const file of ['auto/updater.js','auto/service.js'])acorn.parse(fs.readFileSync(path.join(root,file),'utf8'),{ecmaVersion:5});
  for(const script of loader.matchAll(/<script>([\s\S]*?)<\/script>/g))acorn.parse(script[1],{ecmaVersion:5});
@@ -28,30 +30,30 @@ function release(v){const data=JSON.parse(initialText);data.version=v;for(const 
   await page.goto('http://127.0.0.1:8081/module/permanent/auto/loader.html');await page.getByRole('button',{name:'Settings',exact:true}).click();
   await page.getByRole('heading',{name:'Automatic updates',exact:true}).waitFor();
   assert.equal(new URL(page.url()).origin,'http://127.0.0.1:8081');assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('sl.auth'))),'synthetic-local-account');
-  assert.match(await page.locator('#status').textContent(),/3\.1\.0/);
+  assert.match(await page.locator('#status').textContent(),new RegExp(installedVersion.replace(/\./g,'\\.')));
   assert.equal(await page.locator('#pause use').getAttribute('xlink:href'),'#player-pause');
   await page.getByRole('button',{name:'Play test video'}).click();await page.waitForFunction(()=>avCalls.includes('play'));
-  latest=release('3.1.1');await new Promise(r=>controller.check(r));
-  assert.equal(controller.info().installed,'3.1.0');assert.equal(controller.info().available,'3.1.1');
+  latest=release(nextVersion);await new Promise(r=>controller.check(r));
+  assert.equal(controller.info().installed,installedVersion);assert.equal(controller.info().available,nextVersion);
   assert.equal(await page.locator('#player').isVisible(),true,'checking must not interrupt the player');
   assert.equal(await page.evaluate(()=>avCalls.includes('stop')),false);
   await page.getByRole('button',{name:'Stop',exact:true}).click();
   await page.getByRole('button',{name:'Reopen app',exact:true}).click();await page.getByRole('button',{name:'Settings',exact:true}).click();
-  await page.locator('#status').filter({hasText:'3.1.1'}).waitFor();
-  assert.equal((await api('/health')).data.version,'3.1.1');
+  await page.locator('#status').filter({hasText:nextVersion}).waitFor();
+  assert.equal((await api('/health')).data.version,nextVersion);
   assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('sl.progress')).fixture.seconds),42);
   assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('sl.hiddenCatalogs'))),['synthetic-hidden-preference']);
-  await page.getByRole('button',{name:'Check for updates',exact:true}).click();await page.getByText('Installed 3.1.1 · No update waiting',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Check for updates',exact:true}).click();await page.getByText('Installed '+nextVersion+' · No update waiting',{exact:true}).waitFor();
   await page.screenshot({path:path.join(root,'artifacts/automatic-updates-settings.jpg')});
-  latest=release('3.1.2');broken=true;await new Promise(r=>controller.check(r));assert.equal(controller.info().available,null);assert.equal(controller.info().installed,'3.1.1');
+  latest=release(failedVersion);broken=true;await new Promise(r=>controller.check(r));assert.equal(controller.info().available,null);assert.equal(controller.info().installed,nextVersion);
   broken=false;const token=(await api('/auto/status')).data.token;
-  const failedBoot=await api('/auto/launch',token);assert.equal(failedBoot.data.version,'3.1.2');
-  const rolledBack=await api('/auto/launch',token);assert.equal(rolledBack.data.version,'3.1.1','an unconfirmed app start must roll back on the next opening');
+  const failedBoot=await api('/auto/launch',token);assert.equal(failedBoot.data.version,failedVersion);
+  const rolledBack=await api('/auto/launch',token);assert.equal(rolledBack.data.version,nextVersion,'an unconfirmed app start must roll back on the next opening');
   assert.match(rolledBack.data.html,/window.StremioAuto=/);assert(!rolledBack.data.html.includes('player-icons.svg#'));
   assert.equal((await api('/auto/ready/not-current',token)).status,404);
   await context.close();await browser.close();await new Promise(r=>parent.close(r));await new Promise(r=>controller.server.close(r));
   offline=true;controller=createUpdater({bundled:initial,cacheDir:dir,download});await new Promise(r=>controller.server.listen(17780,'127.0.0.1',r));
-  const cachedToken=(await api('/auto/status')).data.token;assert.equal((await api('/auto/launch',cachedToken)).data.version,'3.1.1','offline service restart uses the complete cached update');
+  const cachedToken=(await api('/auto/status')).data.token;assert.equal((await api('/auto/launch',cachedToken)).data.version,nextVersion,'offline service restart uses the complete cached update');
   assert(requests.every(u=>/^https:\/\/(raw\.githubusercontent\.com\/Ws3r211\/stremio-lite-tizenbrew\/main\/update\.json|cdn\.jsdelivr\.net\/gh\/Ws3r211\/stremio-lite-tizenbrew@)/.test(u)));
   assert(requests.every(u=>!u.includes('synthetic-local-account')));assert.deepEqual(errors,[]);
   console.log('PASS: ES5 bootstrap, same-origin storage, coherent app/service update, no interruption while checking, invalid downloads, failed-start rollback, offline persistent cache, fixed repository and origin/token checks');
