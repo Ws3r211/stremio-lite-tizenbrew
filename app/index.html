@@ -7,7 +7,21 @@
 <main id="view"></main><footer><span id="status" role="status">Starting…</span><span>Arrows · Select · Return</span></footer></div>
 <section id="player" class="hidden" aria-label="Video player">
 <object id="av-player" type="application/avplayer"></object><video id="video" playsinline></video>
-<div id="subtitle"></div><div id="player-bar"><strong id="playing-title"></strong><span id="time"></span>
-<div id="player-controls"><button id="pause">Pause / play</button><button id="rewind">−30 sec</button><button id="forward">+30 sec</button><button id="tracks">Subtitles / audio</button><button id="stop">Stop</button></div><p id="playback-status" role="status"></p></div>
-<div id="track-menu" class="hidden"></div></section>
+<div id="subtitle"></div>
+<div id="player-chrome">
+<div id="player-top"><button id="player-back" aria-label="Back to sources"><svg aria-hidden="true"><use xlink:href="player-icons.svg#arrow-left"></use></svg><span>Back</span></button><div><span class="player-eyebrow">NOW PLAYING</span><strong id="playing-title"></strong></div><span id="player-engine"></span></div>
+<div id="player-bar"><div class="player-status-row"><span id="playback-status" role="status"></span><span id="time"></span></div>
+<div id="timeline-wrap"><div class="timeline-rail"><span id="buffered-progress"></span><span id="played-progress"></span></div><input id="timeline" aria-label="Playback position" type="range" min="0" max="100" step="1" value="0" disabled><span id="seek-preview" class="hidden"></span></div>
+<div id="player-controls"><div class="transport-controls">
+<button id="pause" aria-label="Pause / play" class="transport-primary"><svg aria-hidden="true"><use xlink:href="player-icons.svg#player-pause"></use></svg><span class="button-label">Pause</span></button>
+<button id="rewind" aria-label="Back 10 seconds"><svg aria-hidden="true"><use xlink:href="player-icons.svg#rewind-backward-10"></use></svg><span>10 seconds</span></button>
+<button id="forward" aria-label="Forward 10 seconds"><svg aria-hidden="true"><use xlink:href="player-icons.svg#rewind-forward-10"></use></svg><span>10 seconds</span></button>
+</div><div class="player-tools">
+<button id="jump"><svg aria-hidden="true"><use xlink:href="player-icons.svg#clock"></use></svg><span>Go to time</span></button>
+<button id="audio"><svg aria-hidden="true"><use xlink:href="player-icons.svg#volume"></use></svg><span>Audio</span></button>
+<button id="tracks"><svg aria-hidden="true"><use xlink:href="player-icons.svg#subtitles"></use></svg><span>Subtitles</span></button>
+<button id="stop">Stop</button></div></div><p class="player-hint">Up to timeline · Left / Right to scrub · OK to seek · Return to cancel or leave</p></div>
+</div>
+<div id="player-state" class="hidden" role="status"><span id="player-state-label"></span><progress id="buffer-progress" max="100"></progress><button id="player-error-back" class="hidden">Choose another source</button></div>
+<div id="track-scrim" class="hidden"></div><div id="track-menu" class="hidden" role="dialog" aria-modal="true" aria-label="Player settings"></div></section>
 <script src="core.js"></script><script src="app.js"></script></body></html>

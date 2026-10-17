@@ -12,10 +12,21 @@
     var playback = null, playbackEpoch = 0, cues = [], barTimer = null, subtitleTimer = null;
     var catalogCache = {}, heroCache = {}, discoverState = {type: 'all', row: 0, card: 0}, discoverTick = null;
     var homeScroll = null, heroTimer = null;
+    var menuSerial = 0, menuReturn = 'tracks', scrubCount = 0, scrubLast = 0;
     function read(key, fallback) { try { return JSON.parse(localStorage.getItem('sl.' + key)) || fallback; } catch (e) { return fallback; } }
-    function save(key, value) { try { localStorage.setItem('sl.' + key, JSON.stringify(value)); } catch (e) { status('TV storage is full; settings could not be saved.'); } }
+    function save(key, value) { try { localStorage.setItem('sl.' + key, JSON.stringify(value)); return true; } catch (e) { status('TV storage is full; settings could not be saved.'); return false; } }
     var authKey = read('auth', ''), addons = read('addons', [CINEMETA]), library = [], progress = read('progress', {});
+    var hiddenCatalogs = read('hiddenCatalogs', []);
+    if (!Array.isArray(hiddenCatalogs)) hiddenCatalogs = [];
     if (!Array.isArray(addons) || !addons.length) addons = [CINEMETA];
+    var supportedAddons = addons.filter(function (addon) { return !C.isLocalFiles(addon); });
+    if (supportedAddons.length !== addons.length) {
+        addons = supportedAddons.length ? supportedAddons : [CINEMETA];
+        save('addons', addons); pruneHiddenCatalogs();
+    }
+    if (read('playerPrefsVersion', 0) !== 3) {
+        if (save('bufferMode', 'default')) save('playerPrefsVersion', 3);
+    }
     function node(tag, text, className) {
         var n = document.createElement(tag);
         if (text !== null && text !== undefined) n.textContent = text;
@@ -113,6 +124,8 @@
     }
     function home(restore) {
         nav('Discover'); var mine = begin('Discover', function () { home(true); }), choices = C.catalogs(addons, false);
+        var catalogCount = choices.length;
+        choices = choices.filter(function (choice) { return hiddenCatalogs.indexOf(C.resourceURL(choice.addon, 'catalog', choice.catalog.type, choice.catalog.id)) < 0; });
         view.textContent = ''; view.className = 'discover-view'; document.body.className = 'discover';
         // Keep account order within each group, while making custom catalogs immediately visible.
         choices = choices.filter(function (x) { return x.addon.manifest.id !== CINEMETA.manifest.id; }).concat(
@@ -271,7 +284,12 @@
                 }
             });
         };
-        if (!choices.length) { message('No catalogs for this selection. Add a content addon in Settings.', false, shelves); focusFirst(filters); }
+        if (!choices.length) {
+            filters.className += ' empty-filters';
+            message(catalogCount ? 'No Home catalogs are visible for this selection. Choose which catalogs to show in Settings.' : 'Your installed addons do not provide Home catalogs. Add a content addon in Settings.', false, shelves);
+            button('Choose Home catalogs', function () { settings(); focusFirst(document.getElementById('home-catalogs')); ensureVisible(document.activeElement); }, shelves);
+            focusFirst(shelves);
+        }
         if (restore && rows[discoverState.row] && !rows[discoverState.row].loaded) { loadRow(rows[discoverState.row]); rows[discoverState.row].section.scrollIntoView(); }
         homeScroll(); status('Your catalogs, together.');
     }
@@ -392,10 +410,63 @@
             if (err) return cb(err);
             var list = data && data.addons;
             if (!Array.isArray(list)) return cb(new Error('The account did not return an addon collection.'));
-            addons = list.filter(function (a) { return a.manifest && /^https?:\/\//i.test(a.transportUrl); });
+            addons = list.filter(function (a) { return a.manifest && /^https?:\/\//i.test(a.transportUrl) && !C.isLocalFiles(a); });
             if (!addons.some(function (a) { return a.manifest.id === CINEMETA.manifest.id; })) addons.unshift(CINEMETA);
-            save('addons', addons); cb(null);
+            pruneHiddenCatalogs(); save('addons', addons); cb(null);
         });
+    }
+    function pruneHiddenCatalogs() {
+        var keys = C.catalogs(addons, false).map(function (choice) { return C.resourceURL(choice.addon, 'catalog', choice.catalog.type, choice.catalog.id); });
+        hiddenCatalogs = hiddenCatalogs.filter(function (key) { return keys.indexOf(key) >= 0; });
+        save('hiddenCatalogs', hiddenCatalogs);
+        catalogCache = {}; heroCache = {}; discoverState.row = 0; discoverState.card = 0;
+    }
+    function homeCatalogSettings() {
+        var box = node('section', null, 'panel home-catalog-settings'); box.id = 'home-catalogs'; view.appendChild(box);
+        box.appendChild(node('h2', 'Home catalogs'));
+        message('Choose which catalogs appear on Home. Hidden catalogs are not requested there. Your addons stay installed for search, details and streams.', false, box);
+        var choices = C.catalogs(addons, false), switches = [], count = node('p', '', 'muted'); box.appendChild(count);
+        if (!choices.length) { count.textContent = 'No Home catalogs are available from your installed addons.'; return; }
+        var actions = node('div', null, 'catalog-actions'); box.appendChild(actions);
+        function refresh() {
+            var visible = 0;
+            switches.forEach(function (entry) {
+                var shown = hiddenCatalogs.indexOf(entry.key) < 0;
+                entry.control.textContent = shown ? 'Shown' : 'Hidden';
+                entry.control.className = 'catalog-toggle' + (shown ? ' enabled' : '');
+                entry.control.setAttribute('aria-checked', String(shown));
+                if (shown) visible++;
+            });
+            count.textContent = visible + ' of ' + choices.length + ' catalogs shown on Home';
+        }
+        function changed() {
+            var saved = save('hiddenCatalogs', hiddenCatalogs); catalogCache = {}; heroCache = {};
+            discoverState.row = 0; discoverState.card = 0; refresh();
+            if (saved) status('Home catalog choices saved on this TV.');
+        }
+        button('Show all', function () { hiddenCatalogs = []; changed(); }, actions);
+        button('Hide all', function () { hiddenCatalogs = choices.map(function (choice) { return C.resourceURL(choice.addon, 'catalog', choice.catalog.type, choice.catalog.id); }); changed(); }, actions);
+        var groups = [];
+        choices.forEach(function (choice) {
+            var addon = choice.addon, c = choice.catalog, group = null;
+            groups.forEach(function (entry) { if (entry.url === addon.transportUrl) group = entry.box; });
+            if (!group) {
+                group = node('div', null, 'catalog-group'); group.appendChild(node('h3', addon.manifest.name || 'Addon')); box.appendChild(group);
+                groups.push({url: addon.transportUrl, box: group});
+            }
+            var row = node('div', null, 'catalog-setting-row'), label = node('div', null, 'catalog-setting-label'); row.appendChild(label);
+            var name = c.name || c.id, type = c.type === 'movie' ? 'Movies' : c.type === 'series' ? 'Series' : c.type;
+            label.appendChild(node('span', name)); label.appendChild(node('small', type)); group.appendChild(row);
+            var key = C.resourceURL(addon, 'catalog', c.type, c.id);
+            var toggle = button('', function () {
+                var index = hiddenCatalogs.indexOf(key);
+                if (index < 0) hiddenCatalogs.push(key); else hiddenCatalogs.splice(index, 1);
+                changed();
+            }, row);
+            toggle.setAttribute('role', 'switch'); toggle.setAttribute('aria-label', 'Show ' + addon.manifest.name + ' · ' + name + ' · ' + type + ' on Home');
+            switches.push({key: key, control: toggle});
+        });
+        refresh();
     }
     function linkAccount(parent, mine) {
         var box = node('div', null, 'panel'); parent.appendChild(box); message('Requesting sign-in code…', false, box);
@@ -423,18 +494,21 @@
         });
     }
     function settings() {
-        nav('Settings'); var mine = begin('Settings', settings), accountBox = node('div', null, 'panel'); view.appendChild(accountBox);
+        nav('Settings'); var mine = begin('Settings', settings);
+        homeCatalogSettings();
+        var accountBox = node('div', null, 'panel'); view.appendChild(accountBox);
         accountBox.appendChild(node('h2', 'Stremio account'));
         message(authKey ? 'Signed in. Imported addons and library are read from your account.' : 'Sign in on your phone to import your existing addons and library.', false, accountBox);
         if (authKey) {
             button('Refresh account addons', function () { status('Importing addons…'); syncAddons(function (err) { if (epoch !== mine) return; settings(); status(err ? err.message : 'Addons refreshed.', !!err); }); }, accountBox);
-            button('Sign out and clear imported addons', function () { authKey = ''; addons = [CINEMETA]; library = []; save('auth', ''); save('addons', addons); settings(); }, accountBox);
+            button('Sign out and clear imported addons', function () { authKey = ''; addons = [CINEMETA]; library = []; hiddenCatalogs = []; save('auth', ''); save('addons', addons); pruneHiddenCatalogs(); settings(); }, accountBox);
         } else button('Sign in with Stremio', function () { this.disabled = true; linkAccount(accountBox, mine); }, accountBox);
         message('The account session and configured addon URLs are stored on this TV. Sign out removes them. Watch progress stays local; this client does not write to your Stremio account.', false, accountBox);
         var addonBox = node('div', null, 'panel'); view.appendChild(addonBox); addonBox.appendChild(node('h2', 'Content addons'));
+        message('Local Files is excluded because its desktop Stremio service is unavailable in this TV client.', false, addonBox);
         addons.forEach(function (a, i) {
             var row = node('div', null, 'toolbar'); row.appendChild(node('span', a.manifest.name || 'Addon'));
-            button('Remove', function () { addons.splice(i, 1); save('addons', addons); settings(); }, row); addonBox.appendChild(row);
+            button('Remove', function () { addons.splice(i, 1); pruneHiddenCatalogs(); save('addons', addons); settings(); }, row); addonBox.appendChild(row);
         });
         var form = node('form'), label = node('label', 'Addon manifest URL'), field = document.createElement('input');
         field.type = 'text'; field.className = 'wide'; field.placeholder = 'https://your-addon/manifest.json'; field.id = 'addon-url'; label.htmlFor = field.id;
@@ -442,11 +516,13 @@
         form.onsubmit = function (e) {
             e.preventDefault(); var target;
             try { target = C.manifestURL(field.value); } catch (err) { return status(err.message, true); }
+            if (C.isLocalFiles({transportUrl: target})) return status('Local Files requires the desktop Stremio service and cannot be added to this TV client.', true);
             status('Checking addon…'); add.disabled = true;
             request(target, null, function (err, manifest) {
                 if (epoch !== mine) return; add.disabled = false;
                 if (err) return status(err.message, true);
                 if (!manifest || !manifest.id || !manifest.name || !Array.isArray(manifest.resources)) return status('This URL did not return a Stremio addon manifest.', true);
+                if (C.isLocalFiles({transportUrl: target, manifest: manifest})) return status('Local Files requires the desktop Stremio service and cannot be added to this TV client.', true);
                 var found = addons.some(function (a) { return a.transportUrl === target; });
                 if (!found) addons.push({transportUrl: target, manifest: manifest}); save('addons', addons); settings(); status('Addon ready.');
             });
@@ -457,163 +533,402 @@
         [['balanced', 'Balanced · 10s start / 15s recovery'], ['steady', 'Extra buffering · 15s start / 20s recovery'], ['default', 'TV default']].forEach(function (entry) {
             var option = node('option', entry[1]); option.value = entry[0]; bufferSelect.appendChild(option);
         });
-        bufferSelect.value = read('bufferMode', 'balanced');
+        bufferSelect.value = read('bufferMode', 'default');
         bufferSelect.onchange = function () { save('bufferMode', bufferSelect.value); status('Buffer setting saved for the next video.'); };
-        message('Extra buffering can reduce pauses on an uneven connection, with a longer wait before playback. If a source still buffers, try 1080p H.264 or a lower bitrate. Dolby Vision is unsupported; choose HDR10 or SDR. Buffer controls apply to Samsung AVPlay.', false, testBox);
+        message('TV default lets Samsung manage buffering and memory. Extra buffering is optional and may use more memory or delay startup. If a source still fails or buffers, try a lower bitrate without Dolby Vision. Buffer controls apply to Samsung AVPlay.', false, testBox);
         message('Test your player with Blender’s Big Buck Bunny MP4 before testing your own streams.', false, testBox);
         button('Play test video', function () {
             play({url: 'https://media.w3.org/2010/05/bunny/trailer.mp4'}, {type: 'movie', id: 'blender-bbb', name: 'Big Buck Bunny'}, 'blender-bbb', 'Big Buck Bunny · playback test');
         }, testBox);
         message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
-        if (session && serviceVersion !== '0.2.0') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
-        focusFirst(); status('Stremio Lite 0.2.0 · unofficial client for older TVs');
+        if (session && serviceVersion !== '3.0.0') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        focusFirst(); status('Stremio Lite 3.0.0 · unofficial client for older TVs');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
+        if (!isFinite(seconds)) return '--:--';
         seconds = Math.max(0, Math.floor(seconds || 0)); var h = Math.floor(seconds / 3600), m = Math.floor(seconds % 3600 / 60), s = seconds % 60;
         return (h ? h + ':' + (m < 10 ? '0' : '') : '') + m + ':' + (s < 10 ? '0' : '') + s;
     }
-    function playbackStatus(text) { document.getElementById('playback-status').textContent = text; }
+    function playbackStatus(text) {
+        document.getElementById('playback-status').textContent = text;
+        var busy = /^(Preparing|Buffering|Retrying|Resuming|Seeking)/.test(text), error = /^Playback failed/.test(text);
+        document.getElementById('player-state').className = busy || error ? (error ? 'player-error' : '') : 'hidden';
+        document.getElementById('player-state-label').textContent = text;
+        document.getElementById('buffer-progress').className = busy ? '' : 'hidden';
+        document.getElementById('player-error-back').className = error ? '' : 'hidden';
+        if (playback) { playback.failed = error; playback.buffering = /^Buffering/.test(text); }
+    }
+    function paintPause() {
+        if (!playback) return;
+        document.querySelector('#pause .button-label').textContent = playback.paused ? 'Play' : 'Pause';
+        document.querySelector('#pause use').setAttributeNS('http://www.w3.org/1999/xlink', 'href', 'player-icons.svg#player-' + (playback.paused ? 'play' : 'pause'));
+        document.getElementById('pause').setAttribute('aria-pressed', String(playback.paused));
+    }
+    function paintTimeline() {
+        if (!playback) return;
+        var range = document.getElementById('timeline'), duration = playback.duration, known = isFinite(duration) && duration > 0;
+        var seconds = playback.scrub === null ? playback.seconds : playback.scrub;
+        var busy = playback.preparing || playback.seeking;
+        range.disabled = !known || busy;
+        ['audio', 'tracks', 'pause'].forEach(function (id) { document.getElementById(id).disabled = busy; });
+        ['jump', 'rewind', 'forward'].forEach(function (id) { document.getElementById(id).disabled = busy || !known; });
+        range.max = known ? Math.floor(duration) : 100; range.value = known ? Math.floor(seconds) : 0;
+        range.setAttribute('aria-valuetext', formatTime(seconds) + ' of ' + formatTime(known ? duration : NaN));
+        document.getElementById('played-progress').style.width = (known ? Math.max(0, Math.min(100, seconds / duration * 100)) : 0) + '%';
+        document.getElementById('time').textContent = formatTime(seconds) + ' / ' + formatTime(known ? duration : NaN);
+        var preview = document.getElementById('seek-preview');
+        preview.className = playback.scrub === null ? 'hidden' : '';
+        preview.textContent = formatTime(seconds) + ' · OK to seek';
+        preview.style.left = Math.max(8, Math.min(92, known ? seconds / duration * 100 : 0)) + '%';
+        if (!playback.native && known) {
+            try {
+                var buffered = document.getElementById('video').buffered, end = 0, i;
+                for (i = 0; i < buffered.length; i++) if (buffered.start(i) <= playback.seconds + 1 && buffered.end(i) >= playback.seconds) end = buffered.end(i);
+                document.getElementById('buffered-progress').style.width = Math.min(100, end / duration * 100) + '%';
+            } catch (e) {}
+        }
+    }
     function updateTime(seconds, duration) {
         if (!playback) return;
         playback.seconds = seconds; playback.duration = duration;
-        document.getElementById('time').textContent = formatTime(seconds) + ' / ' + formatTime(duration);
+        paintTimeline();
         if (seconds - playback.lastSaved > 10) { storeProgress(); playback.lastSaved = seconds; }
         if (cues.length) {
             var text = '', i;
-            for (i = 0; i < cues.length; i++) if (seconds >= cues[i].start && seconds < cues[i].end) { text = cues[i].text; break; }
+            var shifted = seconds - (playback.subtitleOffset || 0);
+            for (i = 0; i < cues.length; i++) if (shifted >= cues[i].start && shifted < cues[i].end) { text = cues[i].text; break; }
             document.getElementById('subtitle').textContent = text;
         }
     }
     function storeProgress() {
-        if (!playback) return;
+        if (!playback || (playback.preparing && !playback.seconds)) return;
         progress[playback.id] = {seconds: playback.seconds || 0, duration: playback.duration || 0, date: Date.now()};
         var keys = Object.keys(progress).sort(function (a, b) { return progress[b].date - progress[a].date; });
         keys.slice(100).forEach(function (key) { delete progress[key]; }); save('progress', progress);
     }
     function showBar() {
-        document.getElementById('player-bar').className = ''; if (barTimer) clearTimeout(barTimer);
-        barTimer = setTimeout(function () { if (playback && !playback.paused) document.getElementById('player-bar').className = 'hidden'; }, 6000);
+        document.getElementById('player-chrome').className = ''; if (barTimer) clearTimeout(barTimer);
+        barTimer = setTimeout(function () {
+            if (playback && !playback.paused && !playback.preparing && !playback.seeking && !playback.buffering && !playback.failed && playback.scrub === null && document.getElementById('track-menu').className === 'hidden') document.getElementById('player-chrome').className = 'hidden';
+        }, 6000);
     }
     function play(stream, meta, id, title) {
         var can = C.playable(stream); if (!can.ok) return status(can.reason, true);
         if (playback) stopPlayback(); var generation = ++playbackEpoch, av = nativePlayer(), video = document.getElementById('video');
-        playback = {id: id, meta: meta, stream: stream, seconds: 0, duration: 0, lastSaved: 0, native: !!av, paused: false, preparing: true, stalls: 0, bufferEvents: 0, lastUISecond: -1};
+        playback = {id: id, meta: meta, stream: stream, seconds: 0, duration: 0, lastSaved: 0, native: !!av, paused: false, preparing: true, stalls: 0, bufferEvents: 0, lastUISecond: -1, scrub: null, subtitleOffset: Number(read('subtitleOffset', 0)) || 0, subtitleChoice: 'default', subtitleSources: [], seeking: false, returnFocus: document.activeElement, returnScroll: window.pageYOffset};
+        window.scrollTo(0, 0);
         document.body.className = 'playing'; document.getElementById('player').className = '';
         document.getElementById('playing-title').textContent = title; document.getElementById('track-menu').className = 'hidden';
         document.getElementById('time').textContent = ''; document.getElementById('subtitle').textContent = ''; cues = [];
+        document.getElementById('subtitle').style.fontSize = Number(read('subtitleSize', 36)) + 'px';
+        document.getElementById('player-engine').textContent = C.streamInfo(stream).tags.slice(0, 3).join(' · ') || 'Direct play';
+        document.getElementById('track-scrim').className = 'hidden'; ++menuSerial;
+        document.getElementById('buffered-progress').style.width = '0%'; document.getElementById('buffer-progress').removeAttribute('value');
+        paintPause(); paintTimeline();
         playbackStatus('Preparing video…'); showBar(); document.getElementById('pause').focus();
         var resume = progress[id], resumeAt = resume && resume.seconds > 10 && resume.seconds < resume.duration - 20 ? resume.seconds : 0;
         function active() { return playback && generation === playbackEpoch; }
-        function failed() { if (!active()) return; showBar(); playbackStatus('Playback failed. Try 1080p H.264, HDR10 or SDR, or another source. Return stops the player.'); }
+        function failed(error) {
+            if (!active()) return;
+            var code = typeof error === 'string' ? error : error && (typeof error.code === 'string' ? error.code : error.name);
+            code = /^[A-Za-z][A-Za-z0-9_]{2,70}$/.test(String(code || '')) ? ' (' + code + ')' : '';
+            showBar(); playbackStatus('Playback failed' + code + '. Try a lower-bitrate source without Dolby Vision. Return stops the player.');
+            document.getElementById('player-error-back').focus();
+        }
         function buffering(percent) {
             if (!active()) return;
             if (percent === undefined) { playback.bufferEvents++; if (!playback.preparing) playback.stalls++; }
             showBar();
+            if (percent === undefined) document.getElementById('buffer-progress').removeAttribute('value'); else document.getElementById('buffer-progress').value = percent;
             playbackStatus('Buffering' + (percent === undefined ? '…' : ' ' + percent + '%') + (playback.stalls >= 2 ? ' · Repeated pauses: try a lower bitrate or enable Extra buffering in Settings.' : ''));
         }
         if (av) {
             video.className = 'hidden'; document.getElementById('av-player').className = '';
-            try {
+            var mode = read('bufferMode', 'default'), attempt = 0, retried = false;
+            if (['balanced', 'steady', 'default'].indexOf(mode) < 0) mode = 'default';
+            var openNative = function (useCustomBuffer) {
+                if (!active()) return;
+                var thisAttempt = ++attempt, started = false, handlingFailure = false;
+                function current() { return active() && thisAttempt === attempt; }
+                function nativeFailed(error) {
+                    if (!current() || handlingFailure) return; handlingFailure = true;
+                    if (!started && useCustomBuffer && !retried) {
+                        retried = true; ++attempt;
+                        playbackStatus('Retrying with TV default buffering…');
+                        try { av.stop(); } catch (stopError) {}
+                        try { av.close(); } catch (closeError) {}
+                        return openNative(false);
+                    }
+                    failed(error);
+                }
+                function startNative() {
+                    if (!current() || started || handlingFailure) return;
+                    try {
+                        av.play(); if (!current() || handlingFailure) return;
+                        started = true; playback.preparing = false;
+                        playbackStatus(retried ? 'Playing · TV default buffering' : 'Playing');
+                        try { updateTime(resumeAt || 0, av.getDuration() / 1000); } catch (timeError) {}
+                        paintPause(); showBar();
+                        if (!document.getElementById('player').contains(document.activeElement)) document.getElementById('pause').focus();
+                    } catch (playError) { nativeFailed(playError); }
+                }
+                try {
                 av.open(can.url); av.setDisplayRect(0, 0, 1920, 1080);
-                var mode = read('bufferMode', 'balanced');
-                if (mode !== 'default' && typeof av.setBufferingParam === 'function') {
+                if (useCustomBuffer && typeof av.setBufferingParam === 'function') {
                     // Samsung requires IDLE: configure after open, before prepareAsync.
                     try { av.setBufferingParam('PLAYER_BUFFER_FOR_PLAY', 'PLAYER_BUFFER_SIZE_IN_SECOND', mode === 'steady' ? 15 : 10); } catch (bufferError) {}
                     try { av.setBufferingParam('PLAYER_BUFFER_FOR_RESUME', 'PLAYER_BUFFER_SIZE_IN_SECOND', mode === 'steady' ? 20 : 15); } catch (resumeBufferError) {}
                     try { if (typeof av.setTimeoutForBuffering === 'function') av.setTimeoutForBuffering(mode === 'steady' ? 45 : 30); } catch (timeoutError) {}
                 }
-                av.setListener({onbufferingstart: function () { buffering(); },
-                    onbufferingprogress: function (p) { buffering(p); },
-                    onbufferingcomplete: function () { if (active()) playbackStatus('Playing'); },
+                av.setListener({onbufferingstart: function () { if (current()) buffering(); },
+                    onbufferingprogress: function (p) { if (current()) buffering(p); },
+                    onbufferingcomplete: function () { if (current()) playbackStatus(playback.preparing ? 'Preparing video…' : 'Playing'); },
                     oncurrentplaytime: function (ms) {
-                        if (!active()) return;
+                        if (!current()) return;
                         // Avoid multiple layout/storage/subtitle scans per frame on older TVs.
                         var second = Math.floor(ms / 250); if (second === playback.lastUISecond) return;
                         playback.lastUISecond = second; updateTime(ms / 1000, av.getDuration() / 1000);
                     },
-                    onstreamcompleted: function () { if (active()) stopPlayback(); }, onerror: failed,
+                    onstreamcompleted: function () { if (current()) stopPlayback(); }, onerror: nativeFailed,
                     onsubtitlechange: function (duration, text) {
-                        if (!active() || cues.length) return;
+                        if (!current() || cues.length || playback.subtitleChoice === 'off') return;
                         var stripped = String(text || '').replace(/<[^>]*>/g, ''); document.getElementById('subtitle').textContent = stripped;
-                        clearTimeout(subtitleTimer); subtitleTimer = setTimeout(function () { if (active()) document.getElementById('subtitle').textContent = ''; }, Number(duration) || 3000);
+                        clearTimeout(subtitleTimer); subtitleTimer = setTimeout(function () { if (current()) document.getElementById('subtitle').textContent = ''; }, Number(duration) || 3000);
                     }});
                 av.prepareAsync(function () {
-                    if (!active()) return; playback.preparing = false;
-                    if (resumeAt) { try { av.seekTo(resumeAt * 1000); } catch (e) {} }
-                    av.play(); playbackStatus('Playing · Samsung AVPlay');
-                }, failed);
-            } catch (e) { failed(); }
+                    if (!current() || handlingFailure) return;
+                    if (resumeAt) {
+                        playbackStatus('Resuming video…');
+                        try { av.seekTo(resumeAt * 1000, startNative, startNative); } catch (seekError) { startNative(); }
+                    } else startNative();
+                }, nativeFailed);
+                } catch (error) { nativeFailed(error); }
+            };
+            openNative(mode !== 'default');
         } else {
             video.className = ''; document.getElementById('av-player').className = 'hidden';
-            video.onerror = failed; video.onended = function () { if (active()) stopPlayback(); };
+            video.onerror = function () {
+                var codes = {1: 'MEDIA_ERR_ABORTED', 2: 'MEDIA_ERR_NETWORK', 3: 'MEDIA_ERR_DECODE', 4: 'MEDIA_ERR_SRC_NOT_SUPPORTED'};
+                failed(video.error ? codes[video.error.code] : 'HTML5_ERROR');
+            }; video.onended = function () { if (active()) stopPlayback(); };
             video.preload = 'auto'; video.onwaiting = function () { buffering(); };
             video.ontimeupdate = function () { if (active()) updateTime(video.currentTime, video.duration); };
-            video.onloadedmetadata = function () { if (active() && resumeAt) { try { video.currentTime = resumeAt; } catch (e) {} } };
-            video.onplaying = function () { if (active()) { playback.preparing = false; playbackStatus('Playing · HTML5'); } };
+            video.onloadedmetadata = function () { if (active()) { if (resumeAt) { try { video.currentTime = resumeAt; } catch (e) {} } updateTime(video.currentTime, video.duration); } };
+            video.onprogress = function () { if (active()) paintTimeline(); };
+            video.onplaying = function () { if (active()) { playback.preparing = false; playbackStatus('Playing'); paintTimeline(); paintPause(); showBar(); if (!document.getElementById('player').contains(document.activeElement)) document.getElementById('pause').focus(); } };
             video.src = can.url;
             var promise = video.play(); if (promise && promise.catch) promise.catch(failed);
         }
     }
     function stopPlayback() {
-        if (!playback) return; storeProgress(); var wasNative = playback.native; playback = null; ++playbackEpoch;
+        if (!playback) return; storeProgress(); if (playback.seekTimer) clearTimeout(playback.seekTimer); var wasNative = playback.native, returnFocus = playback.returnFocus, returnScroll = playback.returnScroll; playback = null; ++playbackEpoch; ++menuSerial;
         if (barTimer) clearTimeout(barTimer); if (subtitleTimer) clearTimeout(subtitleTimer);
         if (wasNative) { try { nativePlayer().stop(); } catch (e) {} try { nativePlayer().close(); } catch (e) {} }
-        var video = document.getElementById('video'); video.onended = video.onerror = video.onplaying = video.ontimeupdate = video.onloadedmetadata = video.onwaiting = null;
+        var video = document.getElementById('video'); video.onended = video.onerror = video.onplaying = video.ontimeupdate = video.onloadedmetadata = video.onwaiting = video.onprogress = video.onseeked = null;
         video.pause(); video.removeAttribute('src'); video.load(); cues = [];
-        document.getElementById('player').className = 'hidden'; document.body.className = '';
-        document.getElementById('subtitle').textContent = ''; focusFirst();
+        document.getElementById('player').className = 'hidden'; document.getElementById('track-menu').className = 'hidden'; document.getElementById('track-scrim').className = 'hidden'; document.body.className = '';
+        document.getElementById('subtitle').textContent = '';
+        window.scrollTo(0, returnScroll || 0);
+        if (returnFocus && document.body.contains(returnFocus) && !returnFocus.disabled) returnFocus.focus(); else focusFirst();
     }
     function togglePause(force) {
-        if (!playback || playback.preparing) return; var paused = force === undefined ? !playback.paused : force;
+        if (!playback || playback.preparing || playback.seeking) return; var paused = force === undefined ? !playback.paused : force;
         try { if (playback.native) nativePlayer()[paused ? 'pause' : 'play']();
             else if (paused) document.getElementById('video').pause(); else document.getElementById('video').play();
-            playback.paused = paused; playbackStatus(paused ? 'Paused' : 'Playing'); showBar();
+            playback.paused = paused; playbackStatus(paused ? 'Paused' : 'Playing'); paintPause(); showBar();
         } catch (e) { playbackStatus('Player is not ready.'); }
     }
     function seek(delta) {
-        if (!playback || playback.preparing) return;
-        var target = Math.max(0, Math.min((playback.duration || Infinity) - 1, playback.seconds + delta));
-        try { if (playback.native) nativePlayer().seekTo(target * 1000); else document.getElementById('video').currentTime = target; showBar(); } catch (e) { playbackStatus('Seeking unavailable for this stream.'); }
+        if (playback) seekToSeconds(playback.seconds + delta);
     }
-    function trackMenu() {
-        if (!playback) return; var mine = playbackEpoch, menu = document.getElementById('track-menu'); menu.textContent = ''; menu.className = '';
-        menu.appendChild(node('h2', 'Subtitles and audio'));
-        button('Close', function () { menu.className = 'hidden'; document.getElementById('tracks').focus(); }, menu);
-        button('Subtitles off', function () { cues = []; document.getElementById('subtitle').textContent = ''; if (playback.native) { try { nativePlayer().setSilentSubtitle(true); } catch (e) {} } menu.className = 'hidden'; }, menu);
+    function seekToSeconds(target) {
+        if (!playback || playback.preparing || playback.seeking || !isFinite(playback.duration) || playback.duration <= 0) return false;
+        target = Math.max(0, Math.min(playback.duration - 1, target));
+        var mine = playbackEpoch, settled = false, seekFocus = document.activeElement; playback.seeking = true; playback.scrub = null; scrubCount = 0; paintTimeline();
+        playbackStatus('Seeking to ' + formatTime(target) + '…'); showBar();
+        function finish() {
+            if (settled || !playback || mine !== playbackEpoch) return false;
+            settled = true; clearTimeout(playback.seekTimer); playback.seekTimer = null; playback.seeking = false; paintTimeline();
+            if (playback.menuFocus) { document.getElementById(playback.menuFocus).focus(); playback.menuFocus = null; }
+            else if (document.activeElement === document.body && seekFocus && document.getElementById('player-chrome').contains(seekFocus) && !seekFocus.disabled) seekFocus.focus();
+            return true;
+        }
+        function completed() {
+            if (!finish()) return;
+            updateTime(target, playback.duration);
+            playbackStatus(playback.paused ? 'Paused' : 'Playing'); showBar();
+        }
+        function error() {
+            if (!finish()) return;
+            playbackStatus('Could not seek to this position. Try again or choose another source.'); showBar();
+        }
+        playback.seekTimer = setTimeout(error, 20000);
+        try {
+            if (playback.native) nativePlayer().seekTo(target * 1000, completed, error);
+            else { var video = document.getElementById('video'); video.onseeked = completed; video.currentTime = target; }
+        } catch (e) { error(); }
+        return true;
+    }
+    function scrub(delta) {
+        if (!playback || playback.preparing || playback.seeking || !isFinite(playback.duration) || playback.duration <= 0) return;
+        if (Date.now() - scrubLast > 800) scrubCount = 0;
+        scrubLast = Date.now(); scrubCount++;
+        var step = scrubCount > 16 ? 60 : scrubCount > 8 ? 30 : 10;
+        playback.scrub = Math.max(0, Math.min(playback.duration - 1, (playback.scrub === null ? playback.seconds : playback.scrub) + delta * step));
+        showBar(); paintTimeline(); document.getElementById('timeline').focus();
+    }
+    function cancelScrub() { if (playback) { playback.scrub = null; scrubCount = 0; paintTimeline(); showBar(); } }
+    function closeTrackMenu(refocus) {
+        ++menuSerial; document.getElementById('track-menu').className = 'hidden'; document.getElementById('track-scrim').className = 'hidden';
+        if (playback) {
+            if (refocus !== false) {
+                if (document.getElementById(menuReturn).disabled) playback.menuFocus = menuReturn;
+                else document.getElementById(menuReturn).focus();
+            }
+            showBar();
+        }
+    }
+    function openPlayerMenu(title, returnTo) {
+        if (!playback) return null;
+        ++menuSerial; menuReturn = returnTo;
+        var menu = document.getElementById('track-menu'); menu.textContent = ''; menu.className = ''; menu.setAttribute('aria-label', title);
+        document.getElementById('track-scrim').className = '';
+        var head = node('div', null, 'track-head'); head.appendChild(node('h2', title)); menu.appendChild(head);
+        var close = button('Close', function () { closeTrackMenu(); }, head); close.className = 'menu-close';
+        var body = node('div', null, 'track-body'); menu.appendChild(body); showBar(); return body;
+    }
+    function timeMenu() {
+        var body = openPlayerMenu('Go to time', 'jump'); if (!body) return;
+        var form = node('form'), label = node('label', 'Time (HH:MM:SS or MM:SS)'), field = document.createElement('input');
+        field.id = 'seek-time'; label.htmlFor = field.id; field.type = 'text'; field.value = formatTime(playback.seconds); field.setAttribute('inputmode', 'numeric');
+        form.appendChild(label); form.appendChild(field); var submit = node('button', 'Go to time'); submit.type = 'submit'; form.appendChild(submit); body.appendChild(form);
+        var hint = message('Duration: ' + formatTime(playback.duration), false, body);
+        form.onsubmit = function (event) {
+            event.preventDefault(); var value = C.parseTime(field.value);
+            if (value === null || !playback || !isFinite(playback.duration) || value >= playback.duration) { hint.textContent = 'Enter a valid time before the end of this video.'; hint.className = 'error'; return; }
+            if (seekToSeconds(value)) closeTrackMenu();
+        };
+        field.focus();
+    }
+    function trackMenu(kind) {
+        kind = kind === 'audio' ? 'audio' : 'subtitles';
+        var body = openPlayerMenu(kind === 'audio' ? 'Audio' : 'Subtitles', kind === 'audio' ? 'audio' : 'tracks'); if (!body) return;
+        var mine = playbackEpoch, menu = menuSerial, video = document.getElementById('video'), type = kind === 'audio' ? 'AUDIO' : 'TEXT';
+        function current() { return playback && playbackEpoch === mine && menuSerial === menu; }
+        if (playback.preparing || playback.seeking) { message('Tracks are available once the video is ready.', false, body); focusFirst(document.getElementById('track-menu')); return; }
+        var list = node('div', null, 'track-options'); list.setAttribute('role', 'radiogroup'); list.setAttribute('aria-label', kind === 'audio' ? 'Audio tracks' : 'Subtitle tracks'); body.appendChild(list);
+        function choice(title, detail, selected, action) {
+            var b = button('', action, list); b.className = 'track-choice' + (selected ? ' selected' : ''); b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', String(!!selected));
+            b.appendChild(node('span', title, 'track-name')); b.appendChild(node('small', detail));
+            if (selected) b.appendChild(node('span', 'Selected', 'track-selected'));
+            return b;
+        }
+        function focusChoice() { var chosen = list.querySelector('[aria-checked="true"]'); if (chosen) chosen.focus(); else focusFirst(list.children.length ? list : document.getElementById('track-menu')); }
+        function disableText() {
+            cues = []; document.getElementById('subtitle').textContent = ''; clearTimeout(subtitleTimer);
+            if (playback.native) { try { nativePlayer().setSilentSubtitle(true); } catch (e) {} }
+            else if (video.textTracks) for (var i = 0; i < video.textTracks.length; i++) video.textTracks[i].mode = 'disabled';
+        }
+        if (kind === 'subtitles') choice('Off', 'No subtitles', playback.subtitleChoice === 'off', function () {
+            disableText(); playback.subtitleChoice = 'off'; closeTrackMenu(); playbackStatus('Subtitles off');
+        });
+        var tracks = [], selectedIndex = null;
         if (playback.native) {
-            try { nativePlayer().getTotalTrackInfo().forEach(function (track) {
-                if (track.type !== 'AUDIO' && track.type !== 'TEXT') return;
-                button(track.type + ' ' + track.index, function () {
-                    try { cues = []; nativePlayer().setSilentSubtitle(false); nativePlayer().setSelectTrack(track.type, track.index); menu.className = 'hidden'; }
-                    catch (e) { playbackStatus('This track cannot be selected.'); }
-                }, menu);
-            }); } catch (e) { message('Embedded tracks unavailable while preparing.', false, menu); }
+            try { tracks = nativePlayer().getTotalTrackInfo().filter(function (t) { return t.type === type; }); } catch (e) {}
+            try { nativePlayer().getCurrentStreamInfo().forEach(function (t) { if (t.type === type) selectedIndex = t.index; }); } catch (e) {}
+        } else {
+            var browserTracks = kind === 'audio' ? video.audioTracks : video.textTracks;
+            if (browserTracks) for (var i = 0; i < browserTracks.length; i++) {
+                var t = browserTracks[i]; if (kind !== 'audio' && t.kind !== 'subtitles' && t.kind !== 'captions') continue;
+                tracks.push({index: i, language: t.language, label: t.label});
+                if (kind === 'audio' ? t.enabled : t.mode === 'showing') selectedIndex = i;
+            }
         }
-        var pending = addons.filter(function (a) { return C.supports(a, 'subtitles', playback.meta.type, playback.id); });
-        function subtitleButton(sub) {
-            if (!/^https?:\/\//i.test(sub.url || '')) return;
-            button('External subtitles · ' + (sub.lang || sub.id || 'unknown language'), function () {
-                playbackStatus('Loading subtitles…');
+        tracks.forEach(function (track, index) {
+            var title = C.trackLabel(track).replace(/^Unknown language/, (kind === 'audio' ? 'Audio track ' : 'Subtitle track ') + (index + 1));
+            var selected = kind === 'audio' ? (playback.audioIndex === undefined ? selectedIndex === track.index : playback.audioIndex === track.index) : playback.subtitleChoice === 'track:' + track.index || (playback.subtitleChoice === 'default' && selectedIndex === track.index);
+            choice(title, kind === 'audio' ? 'Embedded audio' : 'Embedded subtitles', selected, function () {
+                if (!current()) return;
+                var wasPaused = playback.paused;
+                try {
+                    if (kind === 'audio') {
+                        if (playback.native) {
+                            // On 2017 TVs AUDIO switching requires PLAYING; restore a paused viewer afterward.
+                            if (wasPaused) nativePlayer().play();
+                            nativePlayer().setSelectTrack('AUDIO', track.index);
+                            if (wasPaused) nativePlayer().pause();
+                        } else for (var j = 0; j < video.audioTracks.length; j++) video.audioTracks[j].enabled = j === track.index;
+                        playback.audioIndex = track.index;
+                    } else {
+                        disableText();
+                        if (playback.native) { nativePlayer().setSelectTrack('TEXT', track.index); nativePlayer().setSilentSubtitle(false); }
+                        else video.textTracks[track.index].mode = 'showing';
+                        playback.subtitleChoice = 'track:' + track.index;
+                    }
+                    closeTrackMenu(); playbackStatus((kind === 'audio' ? 'Audio: ' : 'Subtitles: ') + title);
+                } catch (error) {
+                    if (wasPaused && playback.native && kind === 'audio') { try { nativePlayer().pause(); } catch (pauseError) {} }
+                    message('This player cannot switch to that track for this stream.', true, body);
+                }
+            });
+        });
+        if (kind === 'audio') {
+            if (!tracks.length) message('No switchable audio tracks are exposed by this stream and player. Choose a source with your preferred language.', false, body);
+            focusChoice(); return;
+        }
+        var seen = {}, pending = 0, note = message('Loading addon subtitles…', false, body);
+        function subtitleButton(sub, provider) {
+            if (!/^https?:\/\//i.test(sub.url || '') || seen[sub.url]) return; seen[sub.url] = true;
+            choice(C.languageName(sub.lang || sub.language), 'Addon subtitles · ' + (provider || 'Stream'), playback.subtitleChoice === sub.url, function () {
+                if (!current()) return; note.textContent = 'Loading selected subtitles…';
                 request(sub.url, null, function (err, text) {
-                    if (!playback || playbackEpoch !== mine) return;
-                    if (err) return playbackStatus(err.message);
-                    var parsed = C.subtitleCues(text); if (!parsed.length) return playbackStatus('Subtitle format unsupported. Use SRT or WebVTT.');
-                    cues = parsed; if (playback.native) { try { nativePlayer().setSilentSubtitle(true); } catch (e) {} }
-                    menu.className = 'hidden'; playbackStatus('External subtitles enabled.');
+                    if (!current()) return;
+                    if (err) { note.textContent = err.message; note.className = 'error'; return; }
+                    var parsed = C.subtitleCues(text);
+                    if (!parsed.length) { note.textContent = 'Use an SRT or WebVTT subtitle file.'; note.className = 'error'; return; }
+                    disableText(); cues = parsed; playback.subtitleChoice = sub.url;
+                    closeTrackMenu(); playbackStatus('External subtitles enabled.'); updateTime(playback.seconds, playback.duration);
                 }, true);
-            }, menu);
+            });
         }
-        (playback.stream.subtitles || []).forEach(subtitleButton);
-        pending.forEach(function (a) {
+        (playback.stream.subtitles || []).forEach(function (sub) { subtitleButton(sub, 'This source'); });
+        if (playback.subtitleSources.length) playback.subtitleSources.forEach(function (entry) { subtitleButton(entry.sub, entry.provider); });
+        else addons.filter(function (a) { return C.supports(a, 'subtitles', playback.meta.type, playback.id); }).forEach(function (a) {
+            pending++;
             var hints = playback.stream.behaviorHints || {}, extra = {};
             ['videoHash', 'videoSize', 'filename'].forEach(function (key) { if (hints[key]) extra[key] = hints[key]; });
             request(C.resourceURL(a, 'subtitles', playback.meta.type, playback.id, extra), null, function (err, data) {
-                if (!playback || playbackEpoch !== mine || err) return;
-                (data.subtitles || []).slice(0, 40).forEach(subtitleButton);
+                if (!current()) return;
+                if (!err) (data.subtitles || []).slice(0, 40).forEach(function (sub) {
+                    playback.subtitleSources.push({sub: sub, provider: a.manifest.name}); subtitleButton(sub, a.manifest.name);
+                });
+                pending--; if (!pending) note.textContent = Object.keys(seen).length ? 'Select a language to apply it.' : 'No addon subtitles returned for this video.';
             });
         });
-        focusFirst(menu); showBar();
+        if (!pending) note.textContent = Object.keys(seen).length ? 'Select a language to apply it.' : 'No addon subtitles returned for this video.';
+        var adjustments = node('div', null, 'subtitle-adjustments'); body.appendChild(adjustments); adjustments.appendChild(node('h3', 'Appearance'));
+        var sizeButtons = [];
+        [['Small', 28], ['Medium', 36], ['Large', 44]].forEach(function (entry) {
+            var b = button(entry[0], function () {
+                save('subtitleSize', entry[1]); document.getElementById('subtitle').style.fontSize = entry[1] + 'px';
+                sizeButtons.forEach(function (item) { item.button.setAttribute('aria-pressed', String(item.size === entry[1])); });
+            }, adjustments);
+            b.setAttribute('aria-label', entry[0] + ' subtitle text');
+            b.setAttribute('aria-pressed', String(Number(read('subtitleSize', 36)) === entry[1])); sizeButtons.push({size: entry[1], button: b});
+        });
+        adjustments.appendChild(node('h3', 'Subtitle timing'));
+        var offset = message('', false, adjustments);
+        function shift(delta) {
+            if (!current()) return;
+            playback.subtitleOffset = Math.max(-30, Math.min(30, playback.subtitleOffset + delta)); save('subtitleOffset', playback.subtitleOffset);
+            offset.textContent = 'Addon subtitles: ' + (playback.subtitleOffset > 0 ? '+' : '') + playback.subtitleOffset.toFixed(1) + 's'; updateTime(playback.seconds, playback.duration);
+        }
+        offset.textContent = 'Addon subtitles: ' + (playback.subtitleOffset > 0 ? '+' : '') + playback.subtitleOffset.toFixed(1) + 's';
+        button('Earlier 0.5s', function () { shift(-0.5); }, adjustments); button('Later 0.5s', function () { shift(0.5); }, adjustments);
+        button('Reset timing', function () { shift(-playback.subtitleOffset); }, adjustments);
+        message('Timing adjusts addon subtitle files; embedded track timing is controlled by the TV.', false, adjustments);
+        focusChoice(); showBar();
     }
     function moveFocus(code, scope) {
         var all = Array.prototype.slice.call(scope.querySelectorAll('button:not([disabled]),input,select'));
@@ -661,17 +976,39 @@
     });
     document.getElementById('pause').onclick = function () { togglePause(); };
     document.getElementById('stop').onclick = stopPlayback;
-    document.getElementById('rewind').onclick = function () { seek(-30); };
-    document.getElementById('forward').onclick = function () { seek(30); };
-    document.getElementById('tracks').onclick = trackMenu;
+    document.getElementById('player-back').onclick = stopPlayback;
+    document.getElementById('player-error-back').onclick = stopPlayback;
+    document.getElementById('rewind').onclick = function () { seek(-10); };
+    document.getElementById('forward').onclick = function () { seek(10); };
+    document.getElementById('tracks').onclick = function () { trackMenu('subtitles'); };
+    document.getElementById('audio').onclick = function () { trackMenu('audio'); };
+    document.getElementById('jump').onclick = timeMenu;
+    document.getElementById('track-scrim').onclick = function () { closeTrackMenu(); };
+    document.getElementById('timeline').oninput = function () {
+        if (!playback || playback.preparing || playback.seeking) return;
+        playback.scrub = Number(this.value); paintTimeline(); showBar();
+    };
+    document.getElementById('timeline').onchange = function () { if (playback && playback.scrub !== null) seekToSeconds(playback.scrub); };
+    document.getElementById('player').onmousemove = function () { if (playback && document.getElementById('player-chrome').className === 'hidden') showBar(); };
     document.addEventListener('keydown', function (e) {
         var code = e.keyCode, tag = document.activeElement && document.activeElement.tagName;
         if (code === 10009 || code === 27 || (code === 8 && tag !== 'INPUT')) {
-            e.preventDefault(); if (playback && document.getElementById('track-menu').className !== 'hidden') { document.getElementById('track-menu').className = 'hidden'; document.getElementById('tracks').focus(); }
+            e.preventDefault(); if (playback && document.getElementById('track-menu').className !== 'hidden') closeTrackMenu();
+            else if (playback && playback.scrub !== null) cancelScrub();
             else goBack(); return;
         }
         if (playback) {
+            var menuOpen = document.getElementById('track-menu').className !== 'hidden';
+            var chromeHidden = document.getElementById('player-chrome').className === 'hidden';
+            var timeline = document.getElementById('timeline'), onTimeline = document.activeElement === timeline;
             showBar();
+            if (!menuOpen) {
+                if ((code === 37 || code === 39) && (onTimeline || chromeHidden)) { e.preventDefault(); scrub(code === 37 ? -1 : 1); return; }
+                if (onTimeline && code === 13) { e.preventDefault(); if (playback.scrub !== null) seekToSeconds(playback.scrub); else togglePause(); return; }
+                if (onTimeline && code === 40) { e.preventDefault(); cancelScrub(); document.getElementById('pause').focus(); return; }
+                if (code === 38 && !onTimeline) { e.preventDefault(); if (!timeline.disabled) timeline.focus(); return; }
+                if (code === 40 && document.activeElement.id === 'player-back') { e.preventDefault(); if (!timeline.disabled) timeline.focus(); return; }
+            }
             if ([10252, 415, 19, 413, 417, 412].indexOf(code) >= 0) {
                 e.preventDefault();
                 if (code === 413) stopPlayback(); else if (code === 417) seek(30); else if (code === 412) seek(-30); else togglePause(code === 415 ? false : code === 19 ? true : undefined);
@@ -680,7 +1017,7 @@
         }
         if (code >= 37 && code <= 40 && !(tag === 'INPUT' && (code === 37 || code === 39)) && !(tag === 'SELECT' && (code === 38 || code === 40))) {
             e.preventDefault(); var menu = document.getElementById('track-menu');
-            moveFocus(code, playback ? (menu.className === 'hidden' ? document.getElementById('player-controls') : menu) : document.getElementById('shell'));
+            moveFocus(code, playback ? (menu.className === 'hidden' ? document.getElementById('player-chrome') : menu) : document.getElementById('shell'));
         }
     });
     document.addEventListener('visibilitychange', function () { if (document.hidden && playback) togglePause(true); });

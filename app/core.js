@@ -35,6 +35,10 @@
     function catalogExtra(catalog, name) {
         return (catalog.extra || []).some(function (item) { return item.name === name; });
     }
+    function isLocalFiles(addon) {
+        return !!addon && ((addon.manifest || {}).id === 'org.stremio.local' ||
+            /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):11470\/local-addon\/manifest\.json\/?$/i.test(addon.transportUrl || ''));
+    }
     function catalogs(addons, searching) {
         var list = [];
         addons.forEach(function (addon) {
@@ -102,6 +106,34 @@
         });
         return cues;
     }
-    return {manifestURL: manifestURL, resourceURL: resourceURL, supports: supports, catalogs: catalogs,
-        catalogExtra: catalogExtra, uniqueMetas: uniqueMetas, playable: playable, sortVideos: sortVideos, streamInfo: streamInfo, subtitleCues: subtitleCues};
+    function languageName(value) {
+        var code = String(value || '').toLowerCase().split(/[-_]/)[0];
+        var names = {en:'English',eng:'English',nl:'Dutch',nld:'Dutch',dut:'Dutch',de:'German',deu:'German',ger:'German',fr:'French',fra:'French',fre:'French',es:'Spanish',spa:'Spanish',it:'Italian',ita:'Italian',pt:'Portuguese',por:'Portuguese',pl:'Polish',pol:'Polish',tr:'Turkish',tur:'Turkish',ar:'Arabic',ara:'Arabic',ja:'Japanese',jpn:'Japanese',ko:'Korean',kor:'Korean',zh:'Chinese',zho:'Chinese',chi:'Chinese',ru:'Russian',rus:'Russian',uk:'Ukrainian',ukr:'Ukrainian',sv:'Swedish',swe:'Swedish',no:'Norwegian',nor:'Norwegian',da:'Danish',dan:'Danish',fi:'Finnish',fin:'Finnish',hi:'Hindi',hin:'Hindi',und:'Unknown language'};
+        return names[code] || (value ? String(value).slice(0, 60) : 'Unknown language');
+    }
+    function trackLabel(track) {
+        var info = track.extra_info || {}, channels, parts;
+        if (typeof info === 'string') { try { info = JSON.parse(info); } catch (e) { info = {}; } }
+        if (!info || typeof info !== 'object') info = {};
+        parts = [languageName(info.language || info.track_lang || track.language)];
+        if (track.label) parts.push(String(track.label).slice(0, 100));
+        if (info.fourCC) parts.push(({AACL:'AAC',AC3:'Dolby Digital',EAC3:'Dolby Digital Plus'})[info.fourCC] || String(info.fourCC));
+        channels = Number(info.channels);
+        if (channels === 2) parts.push('Stereo'); else if (channels === 6) parts.push('5.1 surround'); else if (channels === 8) parts.push('7.1 surround'); else if (channels > 0) parts.push(channels + ' channels');
+        return parts.join(' · ');
+    }
+    function parseTime(text) {
+        var parts = String(text || '').replace(/^\s+|\s+$/g, '').split(':'), total = 0, i, value;
+        if (parts.length < 1 || parts.length > 3) return null;
+        for (i = 0; i < parts.length; i++) {
+            if (!/^\d+$/.test(parts[i])) return null;
+            value = Number(parts[i]);
+            if (i > 0 && value >= 60) return null;
+            total = total * 60 + value;
+        }
+        return isFinite(total) ? total : null;
+    }
+    return {manifestURL: manifestURL, resourceURL: resourceURL, supports: supports, catalogs: catalogs, isLocalFiles: isLocalFiles,
+        catalogExtra: catalogExtra, uniqueMetas: uniqueMetas, playable: playable, sortVideos: sortVideos, streamInfo: streamInfo, subtitleCues: subtitleCues,
+        languageName: languageName, trackLabel: trackLabel, parseTime: parseTime};
 }));
