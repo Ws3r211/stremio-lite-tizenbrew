@@ -644,8 +644,8 @@
             play({url: 'https://media.w3.org/2010/05/bunny/trailer.mp4'}, {type: 'movie', id: 'blender-bbb', name: 'Big Buck Bunny'}, 'blender-bbb', 'Big Buck Bunny · playback test');
         }, testBox);
         message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
-        if (session && serviceVersion !== '3.1.0') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
-        focusFirst(); status('Stremio Lite 3.1.0 · unofficial client for older TVs');
+        if (session && serviceVersion !== '3.1.1') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        focusFirst(); status('Stremio Lite 3.1.1 · unofficial client for older TVs');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
