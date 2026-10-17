@@ -31,6 +31,10 @@ const {chromium}=require('playwright'),createServer=require('../service.js');
      assert.equal(await page.evaluate(()=>attempts),2);assert.equal(await page.evaluate(()=>calls.filter(x=>x==='seek').length),1);
      await page.evaluate(()=>{lateResume();listeners[0].onerror('STALE_ERROR');});
      assert.equal(await page.evaluate(()=>calls.filter(x=>x==='play').length),1);assert.match(await page.locator('#playback-status').textContent(),/^Playing/);
+    }else if(mode==='seek-error'){
+     await page.getByRole('button',{name:'Forward 10 seconds',exact:true}).click();
+     await page.evaluate(()=>{listener.onerror('PLAYER_ERROR_CONNECTION_FAILED');lateResume();});
+     assert.match(await page.locator('#playback-status').textContent(),/Playback failed.*PLAYER_ERROR_CONNECTION_FAILED/,'late manual seek callback cannot clear a native failure');
     }else{
      await page.evaluate(()=>{listener.onbufferingstart();listener.oncurrentplaytime(1000);});
      assert.equal(await page.locator('#playback-status').textContent(),'Playing','advancing media clears stale buffer overlay');
@@ -47,6 +51,6 @@ const {chromium}=require('playwright'),createServer=require('../service.js');
    assert.deepEqual(errors,[]);
   }finally{await context.close();}
  }
- try{await scenario('resume');await scenario('prepare');await scenario('buffer');console.log('PASS: stalled resume restarts once without seeking, stale callbacks ignored, bounded startup, stale buffer overlay cleared, pause exemption, buffering timeout and explicit restart');}
+ try{await scenario('resume');await scenario('prepare');await scenario('buffer');await scenario('seek-error');console.log('PASS: stalled resume restarts once without seeking, stale callbacks ignored, bounded startup, stale buffer overlay cleared, pause exemption, buffering timeout and explicit restart');}
  finally{await browser.close();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;});
