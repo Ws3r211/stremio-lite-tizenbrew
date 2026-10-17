@@ -31,6 +31,12 @@ test('search and required filters choose only callable catalog endpoints', () =>
     assert.deepEqual(C.catalogs(addons,false).map(x=>x.catalog.id),['plain']);
     assert.deepEqual(C.catalogs(addons,true).map(x=>x.catalog.id),['search']);
 });
+test('identify the built-in Local Files addon without removing other network addons', () => {
+    assert.equal(C.isLocalFiles({manifest:{id:'org.stremio.local'},transportUrl:'http://192.0.2.1/manifest.json'}),true);
+    for(const host of ['127.0.0.1','localhost','[::1]'])assert.equal(C.isLocalFiles({transportUrl:'http://'+host+':11470/local-addon/manifest.json'}),true);
+    assert.equal(C.isLocalFiles({manifest:{id:'custom',name:'Local Files'},transportUrl:'https://provider.example/manifest.json'}),false);
+    assert.equal(C.isLocalFiles({transportUrl:'http://127.0.0.1:17780/manifest.json'}),false);
+});
 test('streams needing another transport or headers have actionable errors', () => {
     assert.equal(C.playable({url:'https://example.com/video.mp4'}).ok,true);
     assert.match(C.playable({infoHash:'abc'}).reason,/Torrent/);
@@ -42,6 +48,13 @@ test('episode order, duplicate IDs, and subtitle timestamps use protocol values'
     assert.equal(C.uniqueMetas([{id:'x',type:'movie',name:'a'},{id:'x',type:'movie',name:'a'},{id:'x',type:'series',name:'a'}]).length,2);
     assert.deepEqual(C.subtitleCues('1\r\n00:01:02,500 --> 00:01:05,000\r\n<b>Hello</b>\r\n'),[{start:62.5,end:65,text:'Hello\n'}]);
     assert.equal(C.subtitleCues('WEBVTT\n\n00:02.000 --> 00:04.500\nHello')[0].end,4.5);
+});
+test('player track names and jump times handle real metadata and invalid input', () => {
+    assert.equal(C.trackLabel({extra_info:'{"language":"nld","channels":"6","fourCC":"AACL"}'}),'Dutch · AAC · 5.1 surround');
+    assert.equal(C.trackLabel({extra_info:'null'}),'Unknown language');
+    assert.equal(C.trackLabel({extra_info:'{"track_lang":"en-US"}'}),'English');
+    assert.equal(C.parseTime('01:02:03'),3723);assert.equal(C.parseTime('12:30'),750);assert.equal(C.parseTime('90'),90);
+    for(const value of ['1:60','-1','a:12','1:2:3:4',''])assert.equal(C.parseTime(value),null);
 });
 test('stream labels distinguish codec compatibility from bitrate and file size', () => {
     const info=C.streamInfo({name:'4K HEVC-DV-HDR10+',description:'24GB 25.3 Mbps'});
@@ -80,4 +93,13 @@ test('service starts under the TizenBrew VM contract without __dirname or npm de
     const mockHttp={createServer(){return {on(){},listen(port,host){assert.equal(port,17780);assert.equal(host,'127.0.0.1');listening=true;}};}};
     vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../service.js'),'utf8'),{module:{exports:{}},require:(name)=>name==='http'?mockHttp:require(name),Buffer,console});
     assert.equal(listening,true);
+});
+test('preview serves the bundled player icons as SVG while keeping service source private', async () => {
+    const server=createServer({staticDir:path.join(__dirname,'../app')});await new Promise(r=>server.listen(0,'127.0.0.1',r));
+    const base='http://127.0.0.1:'+server.address().port;
+    try{
+        const icons=await fetch(base+'/player-icons.svg');assert.equal(icons.status,200);assert.match(icons.headers.get('content-type'),/^image\/svg\+xml/);
+        assert.match(await icons.text(),/id="player-play"/);
+        assert.equal((await fetch(base+'/service.js')).status,404);
+    }finally{await new Promise(r=>server.close(r));}
 });

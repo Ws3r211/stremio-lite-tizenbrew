@@ -15,6 +15,8 @@ async function run(browser, existingServer) {
     const addon={transportUrl:'https://fixture.example/manifest.json',manifest:{id:'fixture',name:'Fixture Addon',types:['movie','series'],resources:['meta','stream','subtitles'],catalogs:[]}};
     await context.addInitScript(()=>{
         window.WebAssembly=undefined;
+        localStorage.setItem('sl.bufferMode',JSON.stringify('balanced'));
+        localStorage.setItem('sl.playerPrefsVersion',JSON.stringify(3));
         window.avCalls=[];
         window.webapis={avplay:{
             open(u){window.avCalls.push(['open',u]);},setDisplayRect(){},setListener(l){window.avListener=l;},
@@ -75,8 +77,8 @@ async function run(browser, existingServer) {
         assert.match(await page.locator('#playback-status').textContent(),/Repeated pauses/);
         await page.getByRole('button',{name:'Pause / play'}).click();
         assert(await page.evaluate(()=>avCalls.some(x=>x[0]==='pause')));
-        await page.getByRole('button',{name:'Subtitles / audio'}).click();
-        await page.getByRole('button',{name:/External subtitles/}).click();
+        await page.getByRole('button',{name:'Subtitles',exact:true}).click();
+        await page.getByRole('radio',{name:/English.*Addon subtitles/}).click();
         await page.waitForFunction(()=>document.getElementById('playback-status').textContent==='External subtitles enabled.');
         await page.evaluate(()=>window.avListener.oncurrentplaytime(3000));
         assert.equal(await page.locator('#subtitle').textContent(),'Hello TV');
