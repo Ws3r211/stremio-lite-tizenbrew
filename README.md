@@ -2,9 +2,17 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 3.1.3: complete player remote paths and Home banner return
+
+The player uses explicit remote focus paths. Left/Right moves through Pause, back/forward 10 seconds, Go to time, Audio, Subtitles and Stop without jumping onto the timeline. Up goes from a button to the timeline, then Back; Down returns to the last playback button. On the timeline, Left/Right previews a seek and OK commits it. Hidden controls reopen safely. Track menus scroll their own contents and keep arrow focus inside the dialog, including long audio lists. Playback error actions are reachable by remote too.
+
+On Home, Up from the first visible catalog returns to the featured title and scrolls the banner fully into view; Up again reaches the top navigation. Down returns to catalogs. Right from the featured title reaches content filters. Catalog navigation skips empty rows and retains the chosen column as a loading row is filled. Settings buffer options are explicit remote-friendly choices so the playback test is reachable without a native dropdown trap.
+
+Keep the existing `Ws3r211/stremio-lite-tizenbrew@v3.1.0` Auto entry and reopen it to install runtime 3.1.3. The regression starts at Home and uses arrows/OK to reach the playback test, every player tool, an 18-track audio list, subtitle controls, Go to time, timeline, hidden controls and error actions, then returns through Home shelves to the banner at 1920x1080 and 1280x720. Native AVPlay calls use a mock; physical-TV confirmation is still needed.
+
 ## Version 3.1.2: reachable account controls and predictable Settings navigation
 
-Settings opens on Stremio account, before catalog lists. A fixed section menu jumps directly to account, updates, Home catalogs, addons and playback. Up/Down visits controls in order; Left returns to the section menu, Right/OK opens a section, and Return moves from controls to sections to the top navigation. Focus stays visible below the header and above the footer, including long catalog lists. Text fields retain Left/Right editing; the buffer dropdown retains Up/Down option selection and Left returns to sections.
+Settings opens on Stremio account, before catalog lists. A fixed section menu jumps directly to account, updates, Home catalogs, addons and playback. Up/Down visits controls in order; Left returns to the section menu, Right/OK opens a section, and Return moves from controls to sections to the top navigation. Focus stays visible below the header and above the footer, including long catalog lists. Text fields retain Left/Right editing. Buffer options are remote-friendly choices in version 3.1.3.
 
 Failed or expired sign-in requests re-enable the sign-in button, and an in-progress request can be cancelled. Late responses from a cancelled attempt are ignored. Signed-in TVs show refresh/sign-out controls in the first section.
 
@@ -148,18 +156,3 @@ Browser tests additionally need Playwright and an installed browser. `test/brows
 `test/discover.test.cjs` checks the combined catalog layout, lazy shelves, request limits, horizontal/vertical remote navigation, focus restoration, cached filters, and cached pagination. Browser playback tests check native buffering call order and repeated-stall guidance using a mock; they cannot establish whether a particular TV stream stops stuttering.
 
 `test/home-catalogs.test.cjs` uses a synthetic unavailable catalog and the built-in Local Files descriptor and two addon configurations. It verifies remote toggles, visibility across reloads and addon refreshes, no Home requests to hidden catalogs, retained search, all-hidden recovery, bulk controls, sign-out cleanup, and Local Files exclusion during migration, import and manual addition.
-
-## Source assessment and references
-
-The linked [RameezFridie sample](https://github.com/RameezFridie/tizenbrew-stremio-addon/blob/main/stremio-tizen-addon/index.js) serves one sample movie and one sample stream. It has no Stremio user interface. Its package also lacks the `packageType` and `appPath` fields used by TizenBrew's current application loader. A **Stremio content addon** supplies catalogs or streams to a client; a **TizenBrew application module** supplies the TV client itself. This project implements the latter and consumes the former.
-
-Protocol and integration references:
-
-- [TizenBrew module format](https://github.com/reisxd/TizenBrew/blob/main/docs/MODULES.md), [module loader](https://github.com/reisxd/TizenBrew/blob/main/tizenbrew-app/TizenBrew/service-nextgen/service/utils/moduleLoader.js), and [service launcher](https://github.com/reisxd/TizenBrew/blob/main/tizenbrew-app/TizenBrew/service-nextgen/service/utils/serviceLauncher.js).
-- [Official Stremio web client architecture](https://github.com/Stremio/stremio-web), [account and device-link request definitions](https://github.com/Stremio/stremio-core/blob/development/src/types/api/request.rs), and [response types](https://github.com/Stremio/stremio-core/blob/development/src/types/api/response.rs).
-- [Stremio addon protocol](https://github.com/Stremio/stremio-addon-sdk/tree/master/docs), including [stream types](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/api/responses/stream.md).
-- [Samsung browser versions](https://developer.samsung.com/smarttv/develop/specifications/web-engine-specifications.html) and [AVPlay API](https://developer.samsung.com/smarttv/develop/api-references/samsung-product-api-references/avplay-api.html).
-
-Stremio and TizenBrew are separate projects. This client is not affiliated with their maintainers. Its code is original and MIT-licensed; no official Stremio frontend code is bundled.
-
-`test/playback-recovery.test.cjs` verifies default buffering, the one-time tuned-startup fallback, native error identifiers, resume ordering, stale callbacks, and stop cancellation. `test/player-controls.test.cjs` verifies scrub preview/commit/cancel, jump validation, native audio/subtitle selection, paused audio switching without losing subtitles, text settings, and dialog/source focus restoration. Native track tests use mocks; on-TV validation is still required.

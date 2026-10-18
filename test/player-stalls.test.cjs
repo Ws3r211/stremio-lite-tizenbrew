@@ -43,7 +43,8 @@ const {chromium}=require('playwright'),createServer=require('../service.js');
      assert.equal(await page.locator('#playback-status').textContent(),'Paused','pausing must not trip watchdog');
      await page.getByRole('button',{name:'Pause / play'}).click();await page.evaluate(()=>{listener.onbufferingstart();clockOffset+=61000;});
      await page.locator('#playback-status').filter({hasText:'BUFFERING_TIMEOUT'}).waitFor();
-     await page.getByRole('button',{name:'Retry from beginning',exact:true}).click();await page.waitForFunction(()=>calls.filter(x=>x==='play').length===2);
+     const playsBeforeRetry=await page.evaluate(()=>calls.filter(x=>x==='play').length);
+     await page.getByRole('button',{name:'Retry from beginning',exact:true}).click();await page.waitForFunction(previous=>calls.filter(x=>x==='play').length===previous+1&&/^Playing/.test(document.getElementById('playback-status').textContent),playsBeforeRetry);
      assert.equal(await page.evaluate(()=>attempts),2);assert.match(await page.locator('#playback-status').textContent(),/^Playing/);
     }
    }

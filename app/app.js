@@ -209,8 +209,13 @@
             while (running < 2 && queue.length) queue.shift()();
         }
         function rowCards(row) {
+            var heldFocus = row.track.contains(document.activeElement), heldCard = Number(row.track.getAttribute('data-focus-card')) || 0;
             if (!row.items.length) {
                 row.section.className = 'catalog-row hidden';
+                if (heldFocus) {
+                    var nextRow = visibleHomeRows().filter(function (section) { return Number(section.querySelector('.shelf-track').getAttribute('data-row-index')) > row.index; })[0];
+                    if (nextRow) focusHomeRow(nextRow, heldCard); else focusHomeHero();
+                }
                 // Filters must remain reachable even when the first catalog is empty.
                 view.insertBefore(filters, shelves); filters.className = 'discover-filters empty-filters';
                 if (homeScroll) clearTimeout(discoverTick); discoverTick = setTimeout(function () { if (homeScroll) homeScroll(); }, 0);
@@ -225,7 +230,7 @@
                 image.onerror = function () { this.style.visibility = 'hidden'; };
                 b.appendChild(node('span', meta.name, 'name')); cardInfo(meta, b);
                 b.onfocus = function () {
-                    discoverState.row = row.index; discoverState.card = index;
+                    discoverState.row = row.index; discoverState.card = index; row.track.setAttribute('data-focus-card', String(index));
                     var left = b.offsetLeft, right = left + b.offsetWidth;
                     if (left < row.track.scrollLeft + 8) row.track.scrollLeft = Math.max(0, left - 8);
                     else if (right > row.track.scrollLeft + row.track.clientWidth - 8) row.track.scrollLeft = right - row.track.clientWidth + 8;
@@ -242,11 +247,13 @@
             }
             loadImages(row);
             if (!selected && items.length) selectHero(items[0], row.choice);
-            if (restore && !restored && row.index === discoverState.row && items.length) {
+            if (heldFocus) {
+                restored = true; firstFocused = true; focusHomeRow(row.section, heldCard);
+            } else if (restore && !restored && row.index === discoverState.row && items.length) {
                 restored = true; firstFocused = true;
                 var target = row.track.querySelector('[data-card-index="' + Math.min(discoverState.card, items.length - 1) + '"]');
                 target.focus(); ensureVisible(target);
-            } else if (!firstFocused && items.length && (!restore || !rows[discoverState.row] || !rows[discoverState.row].items.length)) { firstFocused = true; row.track.querySelector('.card').focus(); }
+            } else if (!firstFocused && items.length && (!restore || !rows[discoverState.row] || !rows[discoverState.row].items.length)) { firstFocused = true; if (document.activeElement === document.body) row.track.querySelector('.card').focus(); }
         }
         function loadImages(row) {
             var r = row.section.getBoundingClientRect(); if (r.top > window.innerHeight + 200 || r.bottom < 0) return;
@@ -259,7 +266,11 @@
         }
         function loadRow(row, append) {
             if (row.loading) return; row.loading = true;
-            if (!append) { row.track.textContent = ''; message('Loading catalog…', false, row.track); }
+            if (!append) {
+                var keepFocus = row.track.contains(document.activeElement);
+                row.track.textContent = ''; message('Loading catalog…', false, row.track);
+                if (keepFocus) { row.track.tabIndex = -1; row.track.focus(); }
+            }
             else { var more = row.track.querySelector('.shelf-more'); if (more) { more.disabled = true; more.textContent = 'Loading…'; } }
             queue.push(function () {
                 running++;
@@ -271,7 +282,8 @@
                         row.loaded = false; row.failed = true; row.track.textContent = '';
                         var text = row.choice.addon.manifest.name + ': ' + (err ? err.message : 'Invalid catalog response.');
                         message(text, true, row.track); status(text, true);
-                        button('Retry catalog', function () { row.failed = false; loadRow(row, append); }, row.track);
+                        var retry = button('Retry catalog', function () { row.failed = false; loadRow(row, append); }, row.track);
+                        if (document.activeElement === row.track) { retry.focus(); ensureVisible(retry); }
                     } else {
                         row.failed = false; row.offset = (append ? row.offset : 0) + data.metas.length;
                         var oldLength = row.items.length;
@@ -655,22 +667,29 @@
             });
         };
         var testBox = node('div', null, 'panel'); addSection(testBox, 'playback', 'Playback check'); testBox.appendChild(node('h2', 'Playback check'));
-        var bufferLabel = node('label', 'Streaming buffer'), bufferSelect = document.createElement('select');
-        bufferSelect.id = 'buffer-mode'; bufferLabel.htmlFor = bufferSelect.id; testBox.appendChild(bufferLabel); testBox.appendChild(bufferSelect);
-        [['balanced', 'Balanced · 10s start / 15s recovery'], ['steady', 'Extra buffering · 15s start / 20s recovery'], ['default', 'TV default']].forEach(function (entry) {
-            var option = node('option', entry[1]); option.value = entry[0]; bufferSelect.appendChild(option);
+        testBox.appendChild(node('h3', 'Streaming buffer'));
+        var bufferChoices = node('div', null, 'buffer-choices'); bufferChoices.id = 'buffer-mode';
+        bufferChoices.setAttribute('role', 'radiogroup'); bufferChoices.setAttribute('aria-label', 'Streaming buffer'); testBox.appendChild(bufferChoices);
+        var bufferButtons = [];
+        [['default', 'TV default'], ['balanced', 'Balanced · 10s start / 15s recovery'], ['steady', 'Extra buffering · 15s start / 20s recovery']].forEach(function (entry) {
+            var b = button(entry[1], function () {
+                save('bufferMode', entry[0]); refreshBuffers(); status('Buffer setting saved for the next video.');
+            }, bufferChoices);
+            b.setAttribute('role', 'radio'); bufferButtons.push({value: entry[0], button: b});
         });
-        bufferSelect.value = read('bufferMode', 'default');
-        bufferSelect.onchange = function () { save('bufferMode', bufferSelect.value); status('Buffer setting saved for the next video.'); };
+        function refreshBuffers() {
+            bufferButtons.forEach(function (entry) { entry.button.setAttribute('aria-checked', String(entry.value === read('bufferMode', 'default'))); });
+        }
+        refreshBuffers();
         message('TV default lets Samsung manage buffering and memory. Extra buffering is optional and may use more memory or delay startup. If a source still fails or buffers, try a lower bitrate without Dolby Vision. Buffer controls apply to Samsung AVPlay.', false, testBox);
         message('Test your player with Blender’s Big Buck Bunny MP4 before testing your own streams.', false, testBox);
         button('Play test video', function () {
             play({url: 'https://media.w3.org/2010/05/bunny/trailer.mp4'}, {type: 'movie', id: 'blender-bbb', name: 'Big Buck Bunny'}, 'blender-bbb', 'Big Buck Bunny · playback test');
         }, testBox);
         message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
-        if (session && serviceVersion !== '3.1.2') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        if (session && serviceVersion !== '3.1.3') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
         var initial = content.querySelector('[data-settings-section="' + section + '"]') || accountBox;
-        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.2 · unofficial client for older TVs');
+        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.3 · unofficial client for older TVs');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
@@ -1092,12 +1111,115 @@
         message('Timing adjusts addon subtitle files; embedded track timing is controlled by the TV.', false, adjustments);
         focusChoice(); showBar();
     }
+    function visibleHomeRows() {
+        return Array.prototype.slice.call(view.querySelectorAll('.catalog-row')).filter(function (section) { return section.offsetWidth && section.offsetHeight; });
+    }
+    function focusHomeHero() {
+        var hero = view.querySelector('.feature-copy button:not([disabled])');
+        var target = hero || view.querySelector('.discover-filters .selected') || view.querySelector('.discover-filters button');
+        if (target) target.focus(); window.scrollTo(0, 0);
+    }
+    function focusHomeRow(section, card) {
+        var track = section.querySelector('.shelf-track'), choices = Array.prototype.slice.call(track.querySelectorAll('[data-card-index]'));
+        track.setAttribute('data-focus-card', String(card || 0));
+        var target = choices[Math.min(card || 0, choices.length - 1)] || track.querySelector('button:not([disabled])');
+        if (!target) { track.tabIndex = -1; target = track; }
+        target.focus(); ensureVisible(target); if (homeScroll) homeScroll();
+    }
+    function homeFocus(code) {
+        if (playback || view.className !== 'discover-view') return false;
+        var active = document.activeElement, navBox = document.getElementById('nav'), hero = view.querySelector('.discover-hero'), filters = view.querySelector('.discover-filters');
+        var rows = visibleHomeRows(), target, choices, index, track = active;
+        function firstRow() {
+            if (rows.length) focusHomeRow(rows[0], discoverState.card);
+            else { target = view.querySelector('.catalog-shelves button:not([disabled])'); if (target) { target.focus(); ensureVisible(target); } }
+        }
+        if (navBox.contains(active)) {
+            if (code === 40) focusHomeHero();
+            else if (code === 37 || code === 39) {
+                choices = Array.prototype.slice.call(navBox.querySelectorAll('button')); target = choices[choices.indexOf(active) + (code === 37 ? -1 : 1)]; if (target) target.focus();
+            }
+            return true;
+        }
+        if (hero.contains(active)) {
+            if (code === 38) document.querySelector('#nav [aria-current="page"]').focus();
+            else if (code === 40) firstRow();
+            else if (code === 39) { (filters.querySelector('.selected') || filters.querySelector('button')).focus(); window.scrollTo(0, 0); }
+            return true;
+        }
+        if (filters.contains(active)) {
+            if (code === 38) focusHomeHero();
+            else if (code === 40) firstRow();
+            else {
+                choices = Array.prototype.slice.call(filters.querySelectorAll('button')); target = choices[choices.indexOf(active) + (code === 37 ? -1 : 1)];
+                if (target) target.focus(); else if (code === 37) focusHomeHero();
+            }
+            return true;
+        }
+        while (track && track !== view && track.className !== 'shelf-track') track = track.parentNode;
+        if (!track || track === view) return false;
+        choices = Array.prototype.slice.call(track.querySelectorAll('button:not([disabled])'));
+        if (code === 37 || code === 39) {
+            target = choices[choices.indexOf(active) + (code === 37 ? -1 : 1)];
+            if (target) { target.focus(); ensureVisible(target); } return true;
+        }
+        index = rows.indexOf(track.parentNode); target = rows[index + (code === 38 ? -1 : 1)];
+        if (target) focusHomeRow(target, Number(track.getAttribute('data-focus-card')) || 0);
+        else if (code === 38) focusHomeHero();
+        return true;
+    }
+    function playerMenuVisible(el) {
+        var body = document.querySelector('#track-menu .track-body'); if (!body || !body.contains(el)) return;
+        var rect = el.getBoundingClientRect(), area = body.getBoundingClientRect();
+        if (rect.top < area.top + 8) body.scrollTop += rect.top - area.top - 8;
+        else if (rect.bottom > area.bottom - 8) body.scrollTop += rect.bottom - area.bottom + 8;
+    }
+    function playerFocus(code, menuOpen) {
+        var active = document.activeElement, target, index, choices;
+        if (menuOpen) {
+            var menu = document.getElementById('track-menu');
+            choices = Array.prototype.slice.call(menu.querySelectorAll('button:not([disabled]),input:not([disabled])')).filter(function (el) { return el.offsetWidth && el.offsetHeight; });
+            index = choices.indexOf(active);
+            if (index < 0) target = choices[0];
+            else if (code === 38 || code === 40) target = choices[index + (code === 38 ? -1 : 1)];
+            else {
+                var sibling = choices[index + (code === 37 ? -1 : 1)];
+                if (sibling && sibling.parentNode === active.parentNode && Math.abs(sibling.getBoundingClientRect().top - active.getBoundingClientRect().top) < 10) target = sibling;
+            }
+            if (target) { target.focus(); playerMenuVisible(target); } return;
+        }
+        if (playback.failed) {
+            choices = [document.getElementById('player-retry'), document.getElementById('player-error-back')].filter(function (el) { return el.offsetWidth && !el.disabled; });
+            index = choices.indexOf(active); target = choices[index + (code === 37 || code === 38 ? -1 : 1)];
+            if (index < 0) target = choices[0]; if (target) target.focus(); return;
+        }
+        var timeline = document.getElementById('timeline'), back = document.getElementById('player-back');
+        choices = Array.prototype.slice.call(document.querySelectorAll('#player-controls button:not([disabled])'));
+        index = choices.indexOf(active);
+        var remembered = document.getElementById(playback.controlFocus || 'pause');
+        if (!remembered || remembered.disabled) remembered = choices[0] || back;
+        if (index >= 0) {
+            playback.controlFocus = active.id;
+            if (code === 37 || code === 39) target = choices[index + (code === 37 ? -1 : 1)];
+            else if (code === 38) target = timeline.disabled ? back : timeline;
+        } else if (active === timeline) {
+            if (code === 38) target = back;
+            else if (code === 40) { cancelScrub(); target = remembered; }
+        } else if (active === back) { if (code === 40) target = timeline.disabled ? remembered : timeline; }
+        else target = code === 38 ? back : remembered;
+        if (target) { target.focus(); if (choices.indexOf(target) >= 0) playback.controlFocus = target.id; }
+    }
     function settingsPanel(el) {
         while (el && el !== view) { if (el.getAttribute && el.getAttribute('data-settings-section')) return el; el = el.parentNode; }
         return null;
     }
     document.addEventListener('focusin', function (e) {
-        if (view.className !== 'settings-view' || playback) return;
+        if (playback) {
+            if (document.getElementById('player-controls').contains(e.target)) playback.controlFocus = e.target.id;
+            if (document.getElementById('track-menu').contains(e.target)) playerMenuVisible(e.target);
+            return;
+        }
+        if (view.className !== 'settings-view') return;
         var panel = settingsPanel(e.target), id = panel ? panel.getAttribute('data-settings-section') : e.target.getAttribute('data-settings-target');
         if (!id) return;
         Array.prototype.forEach.call(view.querySelectorAll('[data-settings-target]'), function (b) {
@@ -1133,26 +1255,10 @@
         return true;
     }
     function moveFocus(code, scope) {
-        if (settingsFocus(code)) return;
+        if (settingsFocus(code) || homeFocus(code)) return;
         var all = Array.prototype.slice.call(scope.querySelectorAll('button:not([disabled]),input,select'));
         var active = document.activeElement, from = active && active.getBoundingClientRect(), best = null, score = Infinity;
         if (!from || !scope.contains(active)) return focusFirst(scope);
-        var track = active.parentNode, siblings, index, targetRow, target;
-        if (!playback && track && track.className === 'shelf-track') {
-            if (code === 37 || code === 39) {
-                siblings = Array.prototype.slice.call(track.querySelectorAll('button:not([disabled])'));
-                index = siblings.indexOf(active) + (code === 37 ? -1 : 1);
-                if (siblings[index]) { siblings[index].focus(); ensureVisible(siblings[index]); }
-                return;
-            }
-            index = Number(track.getAttribute('data-row-index'));
-            targetRow = view.querySelectorAll('.catalog-row')[index + (code === 38 ? -1 : 1)];
-            if (targetRow) {
-                target = targetRow.querySelector('[data-card-index="' + (active.getAttribute('data-card-index') || '0') + '"]') || targetRow.querySelector('button:not([disabled])');
-                if (target) { target.focus(); ensureVisible(target); if (homeScroll) homeScroll(); return; }
-            } else if (code === 38) { focusFirst(view.querySelector('.discover-filters')); ensureVisible(document.activeElement); return; }
-            else return;
-        }
         var x = from.left + from.width / 2, y = from.top + from.height / 2;
         all.forEach(function (el) {
             if (el === active || !el.offsetWidth || !el.offsetHeight) return;
@@ -1209,12 +1315,14 @@
             var chromeHidden = document.getElementById('player-chrome').className === 'hidden';
             var timeline = document.getElementById('timeline'), onTimeline = document.activeElement === timeline;
             showBar();
-            if (!menuOpen) {
+            if (!menuOpen && !playback.failed) {
+                if (chromeHidden && code === 13) { e.preventDefault(); document.getElementById(playback.controlFocus || 'pause').focus(); return; }
                 if ((code === 37 || code === 39) && (onTimeline || chromeHidden)) { e.preventDefault(); scrub(code === 37 ? -1 : 1); return; }
                 if (onTimeline && code === 13) { e.preventDefault(); if (playback.scrub !== null) seekToSeconds(playback.scrub); else togglePause(); return; }
-                if (onTimeline && code === 40) { e.preventDefault(); cancelScrub(); document.getElementById('pause').focus(); return; }
-                if (code === 38 && !onTimeline) { e.preventDefault(); if (!timeline.disabled) timeline.focus(); return; }
-                if (code === 40 && document.activeElement.id === 'player-back') { e.preventDefault(); if (!timeline.disabled) timeline.focus(); return; }
+                if (chromeHidden && code === 40) { e.preventDefault(); document.getElementById(playback.controlFocus || 'pause').focus(); return; }
+            }
+            if (code >= 37 && code <= 40 && !(tag === 'INPUT' && document.activeElement !== timeline && (code === 37 || code === 39))) {
+                e.preventDefault(); playerFocus(code, menuOpen); return;
             }
             if ([10252, 415, 19, 413, 417, 412].indexOf(code) >= 0) {
                 e.preventDefault();
