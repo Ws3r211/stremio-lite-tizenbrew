@@ -4,6 +4,10 @@
     var http = require('http'), https = require('https'), url = require('url'), fs = require('fs');
     var path = require('path'), crypto = require('crypto'), vm = require('vm');
     var REPO = 'Ws3r211/stremio-lite-tizenbrew';
+    // ISRG Root X1: public trust anchor, valid through 2035. https://letsencrypt.org/certificates/
+    // SHA-256 96BCEC06264976F37460779ACF28C5A7CFE8A3C0AAE11A8FFCEE05C0BDDF08C6.
+    // Node 4 predates this CA. Use it only for raw.githubusercontent.com; TLS stays verified.
+    var GITHUB_RAW_CA = "-----BEGIN CERTIFICATE-----\nMIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\nTzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\ncmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4\nWhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu\nZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY\nMTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc\nh77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+\n0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U\nA5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW\nT8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH\nB5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC\nB5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv\nKBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn\nOlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn\njh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw\nqHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI\nrU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV\nHRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq\nhkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL\nubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ\n3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK\nNFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5\nORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur\nTkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC\njNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc\noyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq\n4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA\nmRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d\nemyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=\n-----END CERTIFICATE-----\n";
     var FILES = ['service.js', 'app/index.html', 'app/core.js', 'app/app.js', 'app/style.css', 'app/player-icons.svg', 'app/THIRD_PARTY.txt'];
     function hash(text) { return crypto.createHash('sha256').update(text, 'utf8').digest('hex'); }
     function version(v) { return /^\d+\.\d+\.\d+$/.test(v || '') ? v.split('.').map(Number) : null; }
@@ -26,7 +30,10 @@
     function download(target, limit, cb) {
         var done = false, chunks = [], size = 0, parsed = url.parse(target), timer;
         function finish(err, text) { if (done) return; done = true; clearTimeout(timer); cb(err, text); }
-        var req = https.get({hostname: parsed.hostname, path: parsed.path, headers: {'Accept': 'application/json', 'Accept-Encoding': 'identity', 'User-Agent': 'StremioLiteAuto/1'}}, function (res) {
+        var settings = {hostname: parsed.hostname, path: parsed.path, rejectUnauthorized: true,
+            headers: {'Accept': parsed.hostname === 'api.github.com' ? 'application/vnd.github.raw+json' : 'application/json', 'Accept-Encoding': 'identity', 'Cache-Control': 'no-cache', 'User-Agent': 'StremioLiteAuto/2'}};
+        if (parsed.hostname === 'raw.githubusercontent.com') settings.ca = GITHUB_RAW_CA;
+        var req = https.get(settings, function (res) {
             if (res.statusCode !== 200) { res.resume(); return finish(new Error('Update server unavailable')); }
             res.on('data', function (chunk) { size += chunk.length; if (size > limit) { finish(new Error('Update too large')); req.abort(); } else chunks.push(chunk); });
             res.on('end', function () { if (res.complete === false) return finish(new Error('Incomplete download')); finish(null, Buffer.concat(chunks).toString('utf8')); });
@@ -34,7 +41,7 @@
             res.on('error', function () { finish(new Error('Download failed')); });
         });
         req.on('error', function () { finish(new Error('Update network or certificate error')); });
-        timer = setTimeout(function () { finish(new Error('Update check timed out')); req.abort(); }, limit < 100000 ? 8000 : 20000);
+        timer = setTimeout(function () { finish(new Error('Update check timed out')); req.abort(); }, limit < 100000 ? 6000 : 14000);
     }
     function createUpdater(options) {
         options = options || {};
@@ -79,9 +86,10 @@
             state.blocked = state.current.descriptor.sha256; state.current = state.previous; state.previous = null; state.pending = null; state.unconfirmed = false;
             notice = 'The last update did not finish starting. Restored the previous version.';
         }
-        try { activate(state.current, false); } catch (runtimeError) { state.blocked = state.current.descriptor.sha256; activate(options.bundled, false); notice = 'Update could not start; using the bundled version.'; }
+        var initial = newer(options.bundled.descriptor.version, state.current.descriptor.version) && options.bundled.descriptor.sha256 !== state.blocked ? options.bundled : state.current;
+        try { activate(initial, false); } catch (runtimeError) { state.blocked = initial.descriptor.sha256; activate(options.bundled, false); notice = 'Update could not start; using the bundled version.'; }
         function info() {
-            return {automatic: true, installed: active.version, available: state.pending ? state.pending.descriptor.version : null,
+            return {automatic: true, updaterVersion: 2, installed: active.version, available: state.pending ? state.pending.descriptor.version : null,
                 checkedAt: checkedAt, checking: !!checking, persistent: persistent, notice: notice, previous: state.previous ? state.previous.descriptor.version : null};
         }
         function check(cb) {
@@ -91,22 +99,30 @@
                 var waiters = checking; checking = null; waiters.forEach(function (fn) { fn(null, info()); });
             }
             function pointerReceived(err, text, fallback) {
-                if (err && !fallback) return fetch('https://cdn.jsdelivr.net/gh/' + REPO + '@main/update.json?check=' + Date.now(), 32768, function (e, t) { pointerReceived(e, t, true); });
-                if (err) return finish(err);
+                function alternate(error) {
+                    if (fallback) return finish(error);
+                    fetch('https://api.github.com/repos/' + REPO + '/contents/update.json?ref=main&check=' + Date.now(), 32768, function (e, t) { pointerReceived(e, t, true); });
+                }
+                if (err) return alternate(err);
                 var descriptor;
                 try {
                     descriptor = JSON.parse(text);
                     if (descriptor.schema !== 1 || descriptor.bootstrap !== 1 || !version(descriptor.version) || descriptor.ref !== 'v' + descriptor.version || !/^[a-f0-9]{64}$/.test(descriptor.sha256 || '')) throw new Error('Invalid pointer');
-                } catch (e) { return finish(e); }
+                } catch (e) { return alternate(e); }
                 if (descriptor.sha256 === state.blocked) { notice = 'An update that failed to start was skipped.'; return finish(); }
                 if (!newer(descriptor.version, active.version)) return finish();
                 if (state.pending && state.pending.descriptor.sha256 === descriptor.sha256) return finish();
-                fetch('https://cdn.jsdelivr.net/gh/' + REPO + '@' + descriptor.ref + '/runtime.json', 2 * 1024 * 1024, function (bundleError, bundleText) {
-                    if (bundleError) return finish(bundleError);
+                function bundleReceived(bundleError, bundleText, fallbackBundle) {
+                    function alternateBundle(error) {
+                        if (fallbackBundle) return finish(error);
+                        fetch('https://cdn.jsdelivr.net/gh/' + REPO + '@' + descriptor.ref + '/runtime.json', 2 * 1024 * 1024, function (e, t) { bundleReceived(e, t, true); });
+                    }
+                    if (bundleError) return alternateBundle(bundleError);
                     var record = {descriptor: descriptor, text: bundleText};
-                    try { makeRuntime(record); } catch (e) { return finish(e); }
+                    try { makeRuntime(record); } catch (e) { return alternateBundle(e); }
                     state.pending = record; persist(); finish();
-                });
+                }
+                fetch('https://raw.githubusercontent.com/' + REPO + '/' + descriptor.ref + '/runtime.json', 2 * 1024 * 1024, bundleReceived);
             }
             fetch('https://raw.githubusercontent.com/' + REPO + '/main/update.json?check=' + Date.now(), 32768, pointerReceived);
         }

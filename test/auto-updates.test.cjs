@@ -54,7 +54,8 @@ function release(v){const data=JSON.parse(initialText);data.version=v;for(const 
   await context.close();await browser.close();await new Promise(r=>parent.close(r));await new Promise(r=>controller.server.close(r));
   offline=true;controller=createUpdater({bundled:initial,cacheDir:dir,download});await new Promise(r=>controller.server.listen(17780,'127.0.0.1',r));
   const cachedToken=(await api('/auto/status')).data.token;assert.equal((await api('/auto/launch',cachedToken)).data.version,nextVersion,'offline service restart uses the complete cached update');
-  assert(requests.every(u=>/^https:\/\/(raw\.githubusercontent\.com\/Ws3r211\/stremio-lite-tizenbrew\/main\/update\.json|cdn\.jsdelivr\.net\/gh\/Ws3r211\/stremio-lite-tizenbrew@)/.test(u)));
+  assert(requests.every(u=>/^https:\/\/(raw\.githubusercontent\.com\/Ws3r211\/stremio-lite-tizenbrew\/(main\/update\.json|v\d+\.\d+\.\d+\/runtime\.json)|api\.github\.com\/repos\/Ws3r211\/stremio-lite-tizenbrew\/contents\/update\.json\?|cdn\.jsdelivr\.net\/gh\/Ws3r211\/stremio-lite-tizenbrew@v)/.test(u)));
+  assert.equal((await api('/auto/status')).data.updaterVersion,2);
   assert(requests.every(u=>!u.includes('synthetic-local-account')));assert.deepEqual(errors,[]);
   console.log('PASS: ES5 bootstrap, same-origin storage, coherent app/service update, no interruption while checking, invalid downloads, failed-start rollback, offline persistent cache, fixed repository and origin/token checks');
  }finally{

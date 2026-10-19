@@ -2,6 +2,20 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 3.1.7: update launcher repair (one-time migration)
+
+Includes the HTML5 audio recovery from 3.1.6. Node 4's original trust store rejects GitHub raw's current certificate chain, so the old launcher falls back to a stale jsDelivr branch pointer. Updater 2 restores verified GitHub raw downloads using the public ISRG Root X1 CA, with the independent GitHub Contents API as fallback. It never discovers the latest version through a CDN branch URL. Runtime bundles come from exact version tags, with SHA-256 and script validation; immutable CDN files are only a bundle-download fallback. Both discovery hosts failing keeps the installed app and reports failure.
+
+**Existing v3.1.0 Auto users need this one-time launcher replacement.** A runtime update cannot rewrite the service code embedded in that immutable old module.
+
+1. Remove the old `Ws3r211/stremio-lite-tizenbrew@v3.1.0` Auto module from TizenBrew.
+2. Add `Ws3r211/stremio-lite-tizenbrew@v3.1.7` and fully restart the TV so the old service releases port 17780.
+3. Open **Stremio Lite Auto**. Settings should show **Installed 3.1.7** and **Updater 2**. Keep this v3.1.7 module for future app fixes.
+
+No Developer Mode IP change is needed. The browser origin and storage keys are unchanged: account, addons, catalog preferences and progress stay on the TV. An older saved runtime cannot hide the new bundled fixes; newer saved versions and failed-start rollback are retained. Ordinary releases after this migration use Check for updates / Reopen app without replacing the module or clearing a branch CDN cache.
+
+The root certificate is scoped to raw.githubusercontent.com; certificate and hostname checks remain enabled. Update requests contain no account keys or addon URLs. Local discovery tests cover GitHub API failover, malformed metadata, corrupted downloads, offline migration, newer saved versions and failed-start rollback. Real Node 4 network tests verify public downloads; physical-TV confirmation remains required.
+
 ## Version 3.1.6: HTML5 audio reload recovery
 
 On the reported TV, Playback check shows that Samsung AVPlay is unavailable: it uses the HTML5 player. The earlier AVPlay track-switch changes therefore did not affect its audio selection. TizenBrew opens application modules as HTTP pages; the Samsung `$WEBAPIS` script used by packaged widgets is not exposed by that module proxy.
@@ -46,9 +60,9 @@ Keep the original `Ws3r211/stremio-lite-tizenbrew@v3.1.0` automatic module. Reop
 
 The regression check removes unsupported inset declarations before loading the app, then verifies paused player geometry, every transport button, the timeline, remote scrubbing and the subtitle backdrop at 1920x1080 and 1280x720. The pre-fix CSS fails this check and reproduces the collapsed corner header. This is a targeted compatibility simulation; physical-TV confirmation is still required.
 
-## Version 3.1.0: install once, update on launch
+## Historical version 3.1.0: original automatic launcher
 
-Add `Ws3r211/stremio-lite-tizenbrew@v3.1.0` once in TizenBrew and fully restart the TV to replace its cached service. Launch **Stremio Lite Auto** and keep this entry for future releases. The module version remains the permanent launcher's version; Settings shows the installed app/service version. Your Developer Mode IP stays unchanged. The TV fetches updates itself; no PC or scheduled task is needed.
+The original v3.1.0 launcher is superseded by Updater 2. Use the one-time v3.1.7 migration above. Historical release notes below referring to keeping the v3.1.0 module predate this repair. After migration, the module version stays v3.1.7 while Settings shows the current app/service version.
 
 The permanent ES5/Node 4 launcher checks this repository's public `update.json` on each opening and downloads the complete `runtime.json` from its fixed release tag. It verifies the SHA-256 digest, version, required files and script syntax before activation. The app and service switch together on launch; **Check for updates** in Settings only stages an update until you reopen. Nothing polls for or applies updates during video playback. Your account, addons, Home settings and progress remain in the original browser origin's storage. Update checks send no account or configured addon data.
 

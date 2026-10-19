@@ -631,9 +631,11 @@
             var updates = node('section', null, 'panel'); updates.appendChild(node('h2', 'Automatic updates')); addSection(updates, 'updates', 'Automatic updates');
             message('Updates are checked when you open this app. Your video is never interrupted. Keep this same TizenBrew module for future fixes.', false, updates);
             var updateStatus = message('Installed version ' + window.StremioAuto.version, false, updates);
+            var updateEngine = message('', false, updates);
             function showUpdate(data) {
                 if (epoch !== mine) return;
                 updateStatus.textContent = 'Installed ' + data.installed + (data.available ? ' · ' + data.available + ' ready for next launch' : ' · No update waiting') + (data.persistent === false ? ' · TV update cache unavailable; bundled fallback retained' : '') + (data.notice ? ' · ' + data.notice : '');
+                updateEngine.textContent = data.updaterVersion >= 2 ? 'Updater 2 · Direct GitHub checks; no branch CDN cache.' : 'Legacy updater: replace the old Auto module once with Ws3r211/stremio-lite-tizenbrew@v3.1.7 and fully restart the TV. This upgrades the launcher for future updates.';
             }
             xhr('GET', SERVICE + '/auto/status', null, function (err, data) { if (!err) showUpdate(data); });
             button('Check for updates', function () {
@@ -688,9 +690,9 @@
         }, testBox);
         message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
         if (!nativePlayer()) message('This page uses the browser player. Audio selection reloads the source at your current position, because some older TV browsers update the selected language without changing the decoder. Actual track support depends on the TV and source.', false, testBox);
-        if (session && serviceVersion !== '3.1.6') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        if (session && serviceVersion !== '3.1.7') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
         var initial = content.querySelector('[data-settings-section="' + section + '"]') || accountBox;
-        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.6 · unofficial client for older TVs');
+        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.7 · unofficial client for older TVs');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
