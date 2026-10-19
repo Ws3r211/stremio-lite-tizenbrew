@@ -2,6 +2,10 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 3.1.5: track switching and subtitle seek cleanup
+
+Includes the verified audio/subtitle switching sequence from 3.1.4. Embedded caption text now clears when seeking, and stale subtitle events during a seek are ignored. This preserves pause-aware captions without leaving text from the old playback position. Check for updates and reopen the existing Auto entry to run 3.1.5.
+
 ## Version 3.1.4: apply and verify audio/subtitle changes
 
 Native track selection now waits for AVPlay state and the selected track reported by getCurrentStreamInfo. A paused audio change resumes first, waits for PLAYING, sends a numeric native track index, and allows the decoder change to settle before restoring pause. An ignored request is retried once. The menu stays open while switching or on failure, with a visible status above the track list. Reopening Audio reads the TV's active track instead of a cached requested language.

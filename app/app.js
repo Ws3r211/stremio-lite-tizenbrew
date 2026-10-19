@@ -687,9 +687,9 @@
             play({url: 'https://media.w3.org/2010/05/bunny/trailer.mp4'}, {type: 'movie', id: 'blender-bbb', name: 'Big Buck Bunny'}, 'blender-bbb', 'Big Buck Bunny · playback test');
         }, testBox);
         message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
-        if (session && serviceVersion !== '3.1.4') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        if (session && serviceVersion !== '3.1.5') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
         var initial = content.querySelector('[data-settings-section="' + section + '"]') || accountBox;
-        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.4 · unofficial client for older TVs');
+        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.5 · unofficial client for older TVs');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
@@ -863,7 +863,7 @@
                     },
                     onstreamcompleted: function () { if (current()) stopPlayback(); }, onerror: nativeFailed,
                     onsubtitlechange: function (duration, text, type) {
-                        if (!current() || cues.length || playback.subtitleChoice === 'off') return;
+                        if (!current() || playback.seeking || cues.length || playback.subtitleChoice === 'off') return;
                         if (String(type) === '1') { playbackStatus('This embedded subtitle uses images. Try addon SRT or WebVTT subtitles.'); return; }
                         var stripped = String(text || '').replace(/<br\s*\/?\s*>/gi, '\n').replace(/<[^>]*>/g, '');
                         playback.nativeCue = {text: stripped, end: playback.seconds + Math.max(0, Number(duration) || 3000) / 1000};
@@ -932,6 +932,8 @@
     function seekToSeconds(target) {
         if (!playback || playback.preparing || playback.seeking || playback.failed || !isFinite(playback.duration) || playback.duration <= 0) return false;
         target = Math.max(0, Math.min(playback.duration - 1, target));
+        if (playback.trackChange) playback.trackChange.cancel();
+        if (playback.nativeCue) { playback.nativeCue = null; document.getElementById('subtitle').textContent = ''; }
         var mine = playbackEpoch, settled = false, seekFocus = document.activeElement; playback.seeking = true; playback.scrub = null; scrubCount = 0; paintTimeline();
         playbackStatus('Seeking to ' + formatTime(target) + '…'); showBar();
         function finish() {
@@ -1050,7 +1052,7 @@
             var actual;
             try { actual = nativeTrackIndex(type); } catch (readError) { actual = null; }
             if (actual === index) {
-                // Returning straight to PAUSED can cancel an audio decoder change on older TVs.
+                // Allow a short settling period before restoring the viewer's pause.
                 if (resumed && wasPaused && Date.now() - selectedAt < 350) return later(verify, 100);
                 return finish();
             }
