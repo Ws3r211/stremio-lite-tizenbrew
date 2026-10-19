@@ -687,9 +687,10 @@
             play({url: 'https://media.w3.org/2010/05/bunny/trailer.mp4'}, {type: 'movie', id: 'blender-bbb', name: 'Big Buck Bunny'}, 'blender-bbb', 'Big Buck Bunny · playback test');
         }, testBox);
         message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
-        if (session && serviceVersion !== '3.1.5') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        if (!nativePlayer()) message('This page uses the browser player. Audio selection reloads the source at your current position, because some older TV browsers update the selected language without changing the decoder. Actual track support depends on the TV and source.', false, testBox);
+        if (session && serviceVersion !== '3.1.6') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
         var initial = content.querySelector('[data-settings-section="' + section + '"]') || accountBox;
-        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.5 · unofficial client for older TVs');
+        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.6 · unofficial client for older TVs');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
@@ -765,7 +766,7 @@
             if (playback && !playback.paused && !playback.preparing && !playback.seeking && !playback.buffering && !playback.failed && playback.scrub === null && document.getElementById('track-menu').className === 'hidden') document.getElementById('player-chrome').className = 'hidden';
         }, 6000);
     }
-    function play(stream, meta, id, title, startOver) {
+    function play(stream, meta, id, title, startOver, audioRestart) {
         var can = C.playable(stream); if (!can.ok) return status(can.reason, true);
         if (playback) stopPlayback(); var generation = ++playbackEpoch, av = nativePlayer(), video = document.getElementById('video');
         playback = {id: id, meta: meta, stream: stream, seconds: 0, duration: 0, lastSaved: 0, native: !!av, paused: false, preparing: true, stalls: 0, bufferEvents: 0, lastUISecond: -1, scrub: null, subtitleOffset: Number(read('subtitleOffset', 0)) || 0, subtitleChoice: 'default', subtitleSources: [], seeking: false, returnFocus: document.activeElement, returnScroll: window.pageYOffset};
@@ -776,12 +777,17 @@
         document.getElementById('playing-title').textContent = title; document.getElementById('track-menu').className = 'hidden';
         document.getElementById('time').textContent = ''; document.getElementById('subtitle').textContent = ''; cues = [];
         document.getElementById('subtitle').style.fontSize = Number(read('subtitleSize', 36)) + 'px';
-        document.getElementById('player-engine').textContent = C.streamInfo(stream).tags.slice(0, 3).join(' · ') || 'Direct play';
+        document.getElementById('player-engine').textContent = (av ? 'Samsung AVPlay' : 'HTML5') + ' · ' + (C.streamInfo(stream).tags.slice(0, 3).join(' · ') || 'Direct play');
         document.getElementById('track-scrim').className = 'hidden'; ++menuSerial;
         document.getElementById('buffered-progress').style.width = '0%'; document.getElementById('buffer-progress').removeAttribute('value');
         paintPause(); paintTimeline();
         playbackStatus('Preparing video…'); showBar(); document.getElementById('pause').focus();
         var resume = progress[id], resumeAt = !startOver && resume && resume.seconds > 10 && resume.seconds < resume.duration - 20 ? resume.seconds : 0;
+        if (!av && audioRestart) {
+            resumeAt = audioRestart.seconds;
+            playback.subtitleChoice = audioRestart.subtitleChoice; cues = audioRestart.cues;
+            playback.subtitleOffset = audioRestart.subtitleOffset; playback.subtitleSources = audioRestart.subtitleSources;
+        }
         document.getElementById('player-retry').onclick = function () { play(stream, meta, id, title, true); };
         document.getElementById('player-retry').className = 'hidden';
         function active() { return playback && generation === playbackEpoch && !playback.failed; }
@@ -793,7 +799,7 @@
             clearTimeout(playback.startTimer); clearTimeout(playback.seekTimer); clearInterval(playback.watchTimer);
             playback.preparing = false; playback.seeking = false;
             var timeout = /TIMEOUT/.test(code);
-            showBar(); playbackStatus('Playback failed' + code + (timeout ? '. The source stopped responding. Retry from the beginning or choose another source.' : '. Try a lower-bitrate source without Dolby Vision. Return stops the player.'));
+            showBar(); playbackStatus('Playback failed' + code + (timeout ? '. The source stopped responding. Retry from the beginning or choose another source.' : /AUDIO_/.test(code) ? '. The browser could not reload the selected audio. Try another track or source. Return stops the player.' : '. Try a lower-bitrate source without Dolby Vision. Return stops the player.'));
             paintTimeline(); document.getElementById('player-retry').className = '';
             if (playback.native) { try { av.stop(); } catch (failedStop) {} try { av.close(); } catch (failedClose) {} }
             else video.pause();
@@ -898,11 +904,42 @@
             }; video.onended = function () { if (active()) stopPlayback(); };
             video.preload = 'auto'; video.onwaiting = function () { buffering(); };
             video.ontimeupdate = function () { if (active()) updateTime(video.currentTime, video.duration); };
-            video.onloadedmetadata = function () { if (active()) { if (resumeAt) { try { video.currentTime = resumeAt; } catch (e) {} } updateTime(video.currentTime, video.duration); } };
+            video.onloadedmetadata = function () {
+                if (!active()) return;
+                if (audioRestart) {
+                    try {
+                        var chosen = findBrowserTrack(video.audioTracks, audioRestart.track);
+                        if (chosen < 0) return failed('AUDIO_TRACK_UNAVAILABLE');
+                        // Rebuild the decoder before choosing audio: older TV browsers can
+                        // update enabled flags during playback without changing the sound.
+                        video.audioTracks[chosen].enabled = true;
+                        for (var a = 0; a < video.audioTracks.length; a++) if (a !== chosen) video.audioTracks[a].enabled = false;
+                        if (!video.audioTracks[chosen].enabled) return failed('AUDIO_TRACK_REJECTED');
+                        var textIndex = audioRestart.textTrack ? findBrowserTrack(video.textTracks, audioRestart.textTrack) : -1;
+                        if (video.textTracks) for (var t = 0; t < video.textTracks.length; t++) video.textTracks[t].mode = t === textIndex ? 'showing' : 'disabled';
+                        if (textIndex >= 0) playback.subtitleChoice = 'track:' + textIndex;
+                        function resumeAudio() {
+                            if (!active()) return;
+                            video.onseeked = null;
+                            if (audioRestart.paused) {
+                                clearTimeout(playback.startTimer); video.pause(); playback.preparing = false; playback.paused = true;
+                                playback.lastProgressAt = Date.now(); updateTime(video.currentTime, video.duration); paintPause(); paintTimeline();
+                                playbackStatus('Paused · Audio source reloaded'); showBar();
+                            } else {
+                                var resumed = video.play(); if (resumed && resumed.catch) resumed.catch(failed);
+                            }
+                        }
+                        if (resumeAt > 0) { video.onseeked = resumeAudio; video.currentTime = Math.min(resumeAt, isFinite(video.duration) ? Math.max(0, video.duration - 0.1) : resumeAt); }
+                        else resumeAudio();
+                    } catch (audioError) { failed('AUDIO_RELOAD_FAILED'); }
+                } else if (resumeAt) { try { video.currentTime = resumeAt; } catch (e) {} }
+                if (active()) updateTime(video.currentTime, video.duration);
+            };
             video.onprogress = function () { if (active()) paintTimeline(); };
-            video.onplaying = function () { if (active()) { playback.preparing = false; playbackStatus('Playing'); paintTimeline(); paintPause(); showBar(); if (!document.getElementById('player').contains(document.activeElement)) document.getElementById('pause').focus(); } };
+            video.onplaying = function () { if (active()) { clearTimeout(playback.startTimer); playback.preparing = false; playbackStatus(audioRestart ? 'Playing · Audio source reloaded' : 'Playing'); paintTimeline(); paintPause(); showBar(); if (!document.getElementById('player').contains(document.activeElement)) document.getElementById('pause').focus(); } };
             video.src = can.url;
-            var promise = video.play(); if (promise && promise.catch) promise.catch(failed);
+            if (audioRestart) { playbackStatus('Preparing selected audio…'); playback.startTimer = setTimeout(function () { failed('AUDIO_RELOAD_TIMEOUT'); }, 30000); video.load(); }
+            else { var promise = video.play(); if (promise && promise.catch) promise.catch(failed); }
         }
     }
     function stopPlayback() {
@@ -1013,6 +1050,24 @@
         tracks.forEach(function (track) { if (track.type === type && isFinite(Number(track.index)) && Number(track.index) >= 0) selected = Number(track.index); });
         return selected;
     }
+    function browserTrackIdentity(track, index) { return {id: String(track.id || ''), language: String(track.language || ''), label: String(track.label || ''), index: index}; }
+    function findBrowserTrack(tracks, identity) {
+        if (!tracks) return -1;
+        var i, candidates = [];
+        if (identity.id) for (i = 0; i < tracks.length; i++) if (String(tracks[i].id) === identity.id && String(tracks[i].language || '') === identity.language) return i;
+        for (i = 0; i < tracks.length; i++) if (String(tracks[i].language || '') === identity.language && String(tracks[i].label || '') === identity.label) candidates.push(i);
+        if (candidates.indexOf(identity.index) >= 0) return identity.index;
+        return candidates.length === 1 ? candidates[0] : -1;
+    }
+    function restartBrowserAudio(index) {
+        if (!playback || playback.native) return;
+        var owner = playback, video = document.getElementById('video'), tracks = video.audioTracks;
+        if (!tracks || !tracks[index]) return;
+        var options = {track: browserTrackIdentity(tracks[index], index), seconds: owner.seconds, paused: owner.paused,
+            subtitleChoice: owner.subtitleChoice, subtitleOffset: owner.subtitleOffset, subtitleSources: owner.subtitleSources.slice(), cues: cues.slice(), textTrack: null};
+        if (video.textTracks) for (var i = 0; i < video.textTracks.length; i++) if (video.textTracks[i].mode === 'showing') options.textTrack = browserTrackIdentity(video.textTracks[i], i);
+        play(owner.stream, owner.meta, owner.id, document.getElementById('playing-title').textContent, false, options);
+    }
     function switchNativeTrack(type, trackIndex, body, done) {
         if (!playback || playback.trackChange) return;
         var owner = playback, av = nativePlayer(), generation = playbackEpoch, serial = menuSerial;
@@ -1087,6 +1142,7 @@
         var mine = playbackEpoch, menu = menuSerial, video = document.getElementById('video'), type = kind === 'audio' ? 'AUDIO' : 'TEXT';
         function current() { return playback && playbackEpoch === mine && menuSerial === menu; }
         if (playback.preparing || playback.seeking) { message('Tracks are available once the video is ready.', false, body); focusFirst(document.getElementById('track-menu')); return; }
+        if (kind === 'audio' && !playback.native) message('HTML5 player: selecting audio reloads this source at your current position. The paused state and subtitles are kept. Language names come from the file.', false, body);
         var list = node('div', null, 'track-options'); list.setAttribute('role', 'radiogroup'); list.setAttribute('aria-label', kind === 'audio' ? 'Audio tracks' : 'Subtitle tracks'); body.appendChild(list);
         function choice(title, detail, selected, action) {
             var b = button('', action, list); b.className = 'track-choice' + (selected ? ' selected' : ''); b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', String(!!selected));
@@ -1127,6 +1183,7 @@
                     closeTrackMenu(); playbackStatus((kind === 'audio' ? 'Audio selected by TV: ' : 'Subtitle track selected by TV: ') + title);
                 }
                 if (playback.native) return switchNativeTrack(type, track.index, body, applied);
+                if (kind === 'audio') return restartBrowserAudio(track.index);
                 try {
                     var selectedTracks = kind === 'audio' ? video.audioTracks : video.textTracks;
                     if (!selectedTracks || !selectedTracks[track.index]) throw new Error('Track unavailable');

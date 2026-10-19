@@ -2,6 +2,14 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 3.1.6: HTML5 audio reload recovery
+
+On the reported TV, Playback check shows that Samsung AVPlay is unavailable: it uses the HTML5 player. The earlier AVPlay track-switch changes therefore did not affect its audio selection. TizenBrew opens application modules as HTTP pages; the Samsung `$WEBAPIS` script used by packaged widgets is not exposed by that module proxy.
+
+HTML5 audio selection now reloads the same source, chooses the matching audio track after metadata loads and before starting playback, and restores the position and paused state. It retains addon subtitle cues, timing and embedded subtitle selection where the track is still available. A missing track, failed reload or 30-second startup timeout gives a playback error. Stop cancels the pending reload. The player header now identifies HTML5 or Samsung AVPlay explicitly.
+
+`test/html5-audio.test.cjs` generates a two-track AAC MP4 with FFmpeg and measures its decoded 440/880 Hz audio in Chrome. It checks French → English → French, a simulated older-browser enabled-flag-only failure, position, pause, addon captions and stopping during reload. This verifies real desktop decoding; **the recovery still needs confirmation on the 2017 TV**. If its decoder ignores the choice even after a reload, a source with the desired default language or a separately installed native player is needed. Keep the existing Auto module, check for updates and reopen to run 3.1.6.
+
 ## Version 3.1.5: track switching and subtitle seek cleanup
 
 Includes the verified audio/subtitle switching sequence from 3.1.4. Embedded caption text now clears when seeking, and stale subtitle events during a seek are ignored. This preserves pause-aware captions without leaving text from the old playback position. Check for updates and reopen the existing Auto entry to run 3.1.5.
