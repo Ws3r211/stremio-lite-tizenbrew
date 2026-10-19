@@ -689,10 +689,10 @@
             play({url: 'https://media.w3.org/2010/05/bunny/trailer.mp4'}, {type: 'movie', id: 'blender-bbb', name: 'Big Buck Bunny'}, 'blender-bbb', 'Big Buck Bunny · playback test');
         }, testBox);
         message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
-        if (!nativePlayer()) message('This page uses the browser player. Audio selection reloads the source at your current position, because some older TV browsers update the selected language without changing the decoder. Actual track support depends on the TV and source.', false, testBox);
-        if (session && serviceVersion !== '3.1.7') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        if (!nativePlayer()) message('This page uses the browser player. Audio selection switches the track during playback and seeks to flush the TV buffer; the app cannot confirm the sound changed. If it did not, Reload source in the Audio menu restarts at your position. Actual track support depends on the TV and source.', false, testBox);
+        if (session && serviceVersion !== '3.1.8') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
         var initial = content.querySelector('[data-settings-section="' + section + '"]') || accountBox;
-        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.7 · unofficial client for older TVs');
+        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.8 · unofficial client for older TVs');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
@@ -938,7 +938,7 @@
                 if (active()) updateTime(video.currentTime, video.duration);
             };
             video.onprogress = function () { if (active()) paintTimeline(); };
-            video.onplaying = function () { if (active()) { clearTimeout(playback.startTimer); playback.preparing = false; playbackStatus(audioRestart ? 'Playing · Audio source reloaded' : 'Playing'); paintTimeline(); paintPause(); showBar(); if (!document.getElementById('player').contains(document.activeElement)) document.getElementById('pause').focus(); } };
+            video.onplaying = function () { if (active()) { clearTimeout(playback.startTimer); playback.preparing = false; if (video.paused || playback.seeking) return; playbackStatus(audioRestart ? 'Playing · Audio source reloaded' : 'Playing'); paintTimeline(); paintPause(); showBar(); if (!document.getElementById('player').contains(document.activeElement)) document.getElementById('pause').focus(); } };
             video.src = can.url;
             if (audioRestart) { playbackStatus('Preparing selected audio…'); playback.startTimer = setTimeout(function () { failed('AUDIO_RELOAD_TIMEOUT'); }, 30000); video.load(); }
             else { var promise = video.play(); if (promise && promise.catch) promise.catch(failed); }
@@ -1070,6 +1070,44 @@
         if (video.textTracks) for (var i = 0; i < video.textTracks.length; i++) if (video.textTracks[i].mode === 'showing') options.textTrack = browserTrackIdentity(video.textTracks[i], i);
         play(owner.stream, owner.meta, owner.id, document.getElementById('playing-title').textContent, false, options);
     }
+    function switchBrowserAudioLive(index, title, body) {
+        if (!playback || playback.native || playback.seeking) return;
+        var owner = playback, mine = playbackEpoch, serial = menuSerial, video = document.getElementById('video'), tracks = video.audioTracks;
+        if (!tracks || !tracks[index]) return message('This audio track is no longer available. Close and reopen the menu.', true, body);
+        var wasPaused = video.paused, at = video.currentTime, settled = false;
+        function current() { return playback === owner && playbackEpoch === mine && !owner.failed; }
+        function settle() {
+            if (settled || !current()) return; settled = true;
+            video.onseeked = null; clearTimeout(owner.seekTimer); owner.seekTimer = null; owner.seeking = false;
+            if (wasPaused) { video.pause(); owner.paused = true; paintPause(); }
+            owner.lastProgressAt = Date.now(); updateTime(video.currentTime, video.duration); paintTimeline(); showBar();
+            playbackStatus((wasPaused ? 'Paused' : 'Playing') + ' · Audio requested: ' + title);
+            if (menuSerial !== serial) return;
+            // Readback only reflects the browser's flags, not what the TV decoder plays.
+            Array.prototype.forEach.call(body.querySelectorAll('[data-native-track]'), function (b) {
+                var selected = Number(b.getAttribute('data-native-track')) === index;
+                b.setAttribute('aria-checked', String(selected)); b.className = 'track-choice' + (selected ? ' selected' : '');
+                var badge = b.querySelector('.track-selected'); if (badge) b.removeChild(badge); if (selected) b.appendChild(node('span', 'Requested', 'track-selected'));
+            });
+            trackNotice(body, 'Requested ' + title + ' and seeked to your position. The app cannot hear the TV output, so it cannot check whether the sound actually changed. Still hearing the old language? Use Reload source below.');
+            var old = body.querySelector('[data-audio-reload]'); if (old) old.parentNode.removeChild(old);
+            var reload = button('Reload source with ' + title, function () { restartBrowserAudio(index); }, body);
+            reload.setAttribute('data-audio-reload', ''); reload.focus();
+        }
+        try {
+            // Samsung's media pipeline may only apply track changes while playing.
+            if (wasPaused) { var started = video.play(); if (started && started.catch) started.catch(function () {}); }
+            tracks[index].enabled = true;
+            for (var j = 0; j < tracks.length; j++) if (j !== index) tracks[j].enabled = false;
+            owner.seeking = true; playbackStatus('Switching audio… seeking to flush the TV buffer'); showBar();
+            video.onseeked = settle; owner.seekTimer = setTimeout(settle, 5000);
+            video.currentTime = at;
+        } catch (error) {
+            owner.seeking = false; video.onseeked = null; clearTimeout(owner.seekTimer);
+            message('The browser refused this audio track. Try Reload source or another source.', true, body);
+            var fallback = button('Reload source with ' + title, function () { restartBrowserAudio(index); }, body); fallback.setAttribute('data-audio-reload', '');
+        }
+    }
     function switchNativeTrack(type, trackIndex, body, done) {
         if (!playback || playback.trackChange) return;
         var owner = playback, av = nativePlayer(), generation = playbackEpoch, serial = menuSerial;
@@ -1144,7 +1182,7 @@
         var mine = playbackEpoch, menu = menuSerial, video = document.getElementById('video'), type = kind === 'audio' ? 'AUDIO' : 'TEXT';
         function current() { return playback && playbackEpoch === mine && menuSerial === menu; }
         if (playback.preparing || playback.seeking) { message('Tracks are available once the video is ready.', false, body); focusFirst(document.getElementById('track-menu')); return; }
-        if (kind === 'audio' && !playback.native) message('HTML5 player: selecting audio reloads this source at your current position. The paused state and subtitles are kept. Language names come from the file.', false, body);
+        if (kind === 'audio' && !playback.native) message('HTML5 player: selecting audio switches the track during playback and seeks to your position so the TV flushes its audio buffer. The app cannot hear the TV, so it cannot confirm the sound changed. Language names come from the file.', false, body);
         var list = node('div', null, 'track-options'); list.setAttribute('role', 'radiogroup'); list.setAttribute('aria-label', kind === 'audio' ? 'Audio tracks' : 'Subtitle tracks'); body.appendChild(list);
         function choice(title, detail, selected, action) {
             var b = button('', action, list); b.className = 'track-choice' + (selected ? ' selected' : ''); b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', String(!!selected));
@@ -1185,7 +1223,7 @@
                     closeTrackMenu(); playbackStatus((kind === 'audio' ? 'Audio selected by TV: ' : 'Subtitle track selected by TV: ') + title);
                 }
                 if (playback.native) return switchNativeTrack(type, track.index, body, applied);
-                if (kind === 'audio') return restartBrowserAudio(track.index);
+                if (kind === 'audio') return switchBrowserAudioLive(Number(track.index), title, body);
                 try {
                     var selectedTracks = kind === 'audio' ? video.audioTracks : video.textTracks;
                     if (!selectedTracks || !selectedTracks[track.index]) throw new Error('Track unavailable');

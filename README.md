@@ -2,6 +2,16 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 3.1.8: live HTML5 audio switch test
+
+TizenBrew application modules run as HTTP pages without Samsung's `webapis`, so this TV always uses the HTML5 player, never AVPlay. On the 2017 TV, the 3.1.6 reload approach changed the selected track in the browser but kept the original language audible.
+
+Choosing an audio track in the HTML5 player now switches it **during playback** and then seeks to the current position, so the TV flushes buffered audio from the old track. A paused video briefly resumes for the switch, because Samsung's media pipeline may only apply track changes while playing, and then pauses again. The menu stays open and marks the track as **Requested**, not as confirmed. The app can only read the browser's track flags; it cannot hear what the TV decoder plays, so it cannot confirm that the sound changed.
+
+If the old language is still audible, **Reload source with …** in the same menu runs the 3.1.6 reload at your current position. If neither works, the TV's HTML5 player ignores audio track selection for this source; choose a source whose default audio is the language you want.
+
+`test/html5-audio.test.cjs` checks the live switch with decoded 440/880 Hz audio in desktop Chrome, a simulated TV that ignores the switch, the reload fallback, pause, position and subtitles. **This still needs confirmation on the 2017 TV.** Keep the v3.1.7 Auto module, use Check for updates and reopen the app to run 3.1.8.
+
 ## Version 3.1.7: update launcher repair (one-time migration)
 
 Includes the HTML5 audio recovery from 3.1.6. Node 4's original trust store rejects GitHub raw's current certificate chain, so the old launcher falls back to a stale jsDelivr branch pointer. Updater 2 restores verified GitHub raw downloads using the public ISRG Root X1 CA, with the independent GitHub Contents API as fallback. It never discovers the latest version through a CDN branch URL. Runtime bundles come from exact version tags, with SHA-256 and script validation; immutable CDN files are only a bundle-download fallback. Both discovery hosts failing keeps the installed app and reports failure.

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "bootstrap": 1,
-  "version": "3.1.7",
-  "ref": "v3.1.7",
-  "sha256": "ddcae18cd18db7b0466220ac436334e2ed0027811120dbbeb97c204161c4fb4c"
+  "version": "3.1.8",
+  "ref": "v3.1.8",
+  "sha256": "ea228b4239d05fe015469815694487cefb25fc36f31fc6b99c17830f392abf5c"
 }
