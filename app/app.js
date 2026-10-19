@@ -687,9 +687,9 @@
             play({url: 'https://media.w3.org/2010/05/bunny/trailer.mp4'}, {type: 'movie', id: 'blender-bbb', name: 'Big Buck Bunny'}, 'blender-bbb', 'Big Buck Bunny · playback test');
         }, testBox);
         message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
-        if (session && serviceVersion !== '3.1.3') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        if (session && serviceVersion !== '3.1.4') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
         var initial = content.querySelector('[data-settings-section="' + section + '"]') || accountBox;
-        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.3 · unofficial client for older TVs');
+        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.4 · unofficial client for older TVs');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
@@ -745,6 +745,7 @@
         playback.seconds = seconds; playback.duration = duration;
         paintTimeline();
         if (seconds - playback.lastSaved > 10) { storeProgress(); playback.lastSaved = seconds; }
+        if (!cues.length && playback.nativeCue && seconds >= playback.nativeCue.end) { playback.nativeCue = null; document.getElementById('subtitle').textContent = ''; }
         if (cues.length) {
             var text = '', i;
             var shifted = seconds - (playback.subtitleOffset || 0);
@@ -786,6 +787,7 @@
         function active() { return playback && generation === playbackEpoch && !playback.failed; }
         function failed(error) {
             if (!active()) return;
+            if (playback.trackChange) playback.trackChange.cancel();
             var code = typeof error === 'string' ? error : error && (typeof error.code === 'string' ? error.code : error.name);
             code = /^[A-Za-z][A-Za-z0-9_]{2,70}$/.test(String(code || '')) ? ' (' + code + ')' : '';
             clearTimeout(playback.startTimer); clearTimeout(playback.seekTimer); clearInterval(playback.watchTimer);
@@ -833,6 +835,7 @@
                     clearTimeout(playback.startTimer);
                     try {
                         av.play(); if (!current() || handlingFailure) return;
+                        try { av.setSilentSubtitle(true); } catch (subtitleModeError) {}
                         started = true; playback.preparing = false;
                         playback.lastProgressAt = Date.now();
                         playbackStatus(retried ? 'Playing · TV default buffering' : 'Playing');
@@ -859,10 +862,12 @@
                         playback.lastUISecond = second; updateTime(ms / 1000, av.getDuration() / 1000);
                     },
                     onstreamcompleted: function () { if (current()) stopPlayback(); }, onerror: nativeFailed,
-                    onsubtitlechange: function (duration, text) {
+                    onsubtitlechange: function (duration, text, type) {
                         if (!current() || cues.length || playback.subtitleChoice === 'off') return;
-                        var stripped = String(text || '').replace(/<[^>]*>/g, ''); document.getElementById('subtitle').textContent = stripped;
-                        clearTimeout(subtitleTimer); subtitleTimer = setTimeout(function () { if (current()) document.getElementById('subtitle').textContent = ''; }, Number(duration) || 3000);
+                        if (String(type) === '1') { playbackStatus('This embedded subtitle uses images. Try addon SRT or WebVTT subtitles.'); return; }
+                        var stripped = String(text || '').replace(/<br\s*\/?\s*>/gi, '\n').replace(/<[^>]*>/g, '');
+                        playback.nativeCue = {text: stripped, end: playback.seconds + Math.max(0, Number(duration) || 3000) / 1000};
+                        document.getElementById('subtitle').textContent = stripped;
                     }});
                 playback.startTimer = setTimeout(function () { nativeFailed('STARTUP_TIMEOUT'); }, 45000);
                 av.prepareAsync(function () {
@@ -901,7 +906,7 @@
         }
     }
     function stopPlayback() {
-        if (!playback) return; storeProgress(); clearTimeout(playback.startTimer); clearTimeout(playback.seekTimer); clearInterval(playback.watchTimer); var wasNative = playback.native, returnFocus = playback.returnFocus, returnScroll = playback.returnScroll; playback = null; ++playbackEpoch; ++menuSerial;
+        if (!playback) return; if (playback.trackChange) playback.trackChange.cancel(); storeProgress(); clearTimeout(playback.startTimer); clearTimeout(playback.seekTimer); clearInterval(playback.watchTimer); var wasNative = playback.native, returnFocus = playback.returnFocus, returnScroll = playback.returnScroll; playback = null; ++playbackEpoch; ++menuSerial;
         if (barTimer) clearTimeout(barTimer); if (subtitleTimer) clearTimeout(subtitleTimer);
         if (wasNative) { try { nativePlayer().stop(); } catch (e) {} try { nativePlayer().close(); } catch (e) {} }
         var video = document.getElementById('video'); video.onended = video.onerror = video.onplaying = video.ontimeupdate = video.onloadedmetadata = video.onwaiting = video.onprogress = video.onseeked = null;
@@ -913,7 +918,9 @@
         if (returnFocus && document.body.contains(returnFocus) && !returnFocus.disabled) returnFocus.focus(); else focusFirst();
     }
     function togglePause(force) {
-        if (!playback || playback.preparing || playback.seeking || playback.failed) return; var paused = force === undefined ? !playback.paused : force;
+        if (!playback || playback.preparing || playback.seeking || playback.failed) return;
+        if (playback.trackChange) playback.trackChange.cancel();
+        var paused = force === undefined ? !playback.paused : force;
         try { if (playback.native) nativePlayer()[paused ? 'pause' : 'play']();
             else if (paused) document.getElementById('video').pause(); else document.getElementById('video').play();
             playback.paused = paused; playback.lastProgressAt = Date.now(); playbackStatus(paused ? 'Paused' : 'Playing'); paintPause(); showBar();
@@ -961,6 +968,7 @@
     }
     function cancelScrub() { if (playback) { playback.scrub = null; scrubCount = 0; paintTimeline(); showBar(); } }
     function closeTrackMenu(refocus) {
+        if (playback && playback.trackChange) playback.trackChange.cancel();
         ++menuSerial; document.getElementById('track-menu').className = 'hidden'; document.getElementById('track-scrim').className = 'hidden';
         if (playback) {
             if (refocus !== false) {
@@ -972,6 +980,7 @@
     }
     function openPlayerMenu(title, returnTo) {
         if (!playback) return null;
+        if (playback.trackChange) playback.trackChange.cancel();
         ++menuSerial; menuReturn = returnTo;
         var menu = document.getElementById('track-menu'); menu.textContent = ''; menu.className = ''; menu.setAttribute('aria-label', title);
         document.getElementById('track-scrim').className = '';
@@ -992,6 +1001,84 @@
         };
         field.focus();
     }
+    function trackNotice(body, text) {
+        var menu = body.parentNode, note = menu.querySelector('[data-track-notice]');
+        if (!note) { note = node('p', '', 'muted'); note.setAttribute('data-track-notice', ''); note.setAttribute('role', 'status'); menu.insertBefore(note, body); }
+        note.className = 'muted'; note.textContent = text; playerMenuVisible(document.activeElement); return note;
+    }
+    function nativeTrackIndex(type) {
+        var tracks = nativePlayer().getCurrentStreamInfo(), selected = null;
+        tracks.forEach(function (track) { if (track.type === type && isFinite(Number(track.index)) && Number(track.index) >= 0) selected = Number(track.index); });
+        return selected;
+    }
+    function switchNativeTrack(type, trackIndex, body, done) {
+        if (!playback || playback.trackChange) return;
+        var owner = playback, av = nativePlayer(), generation = playbackEpoch, serial = menuSerial;
+        var index = Number(trackIndex), started = Date.now(), selectedAt = 0, tries = 0, resumed = false;
+        var wasPaused = owner.paused, note = trackNotice(body, 'Switching ' + (type === 'AUDIO' ? 'audio' : 'subtitles') + '… Waiting for the TV.');
+        note.setAttribute('role', 'status'); body.setAttribute('aria-busy', 'true');
+        var change = {timer: null, cancel: function () { finish(null, true); }}; owner.trackChange = change;
+        function current() { return playback === owner && playbackEpoch === generation && menuSerial === serial && owner.trackChange === change && !owner.failed; }
+        function state() { return typeof av.getState === 'function' ? av.getState() : resumed ? 'PLAYING' : owner.paused ? 'PAUSED' : 'PLAYING'; }
+        function later(fn, delay) { clearTimeout(change.timer); change.timer = setTimeout(function () { if (current()) fn(); }, delay); }
+        function restorePause() {
+            if (!resumed || !wasPaused || playback !== owner || owner.failed) return;
+            av.pause(); owner.paused = true; owner.lastProgressAt = Date.now(); paintPause();
+        }
+        function finish(error, cancelled) {
+            if (owner.trackChange !== change) return;
+            clearTimeout(change.timer); owner.trackChange = null; body.removeAttribute('aria-busy');
+            try { restorePause(); } catch (pauseError) { error = 'The TV could not restore pause. Use Pause / play.'; }
+            if (cancelled || playback !== owner || generation !== playbackEpoch || serial !== menuSerial) return;
+            if (error) {
+                // If a late or ignored request left the old track active, show its actual selection.
+                try { var actual = nativeTrackIndex(type); Array.prototype.forEach.call(body.querySelectorAll('[data-native-track]'), function (b) {
+                    var selected = actual !== null && Number(b.getAttribute('data-native-track')) === actual;
+                    b.setAttribute('aria-checked', String(selected)); b.className = 'track-choice' + (selected ? ' selected' : '');
+                    var badge = b.querySelector('.track-selected'); if (badge) b.removeChild(badge); if (selected) b.appendChild(node('span', 'Selected by TV', 'track-selected'));
+                }); } catch (ignored) {}
+                note.textContent = error; note.className = 'error'; playbackStatus('Track switch was not confirmed. See the open menu.'); return;
+            }
+            done();
+        }
+        function reportFailure(error) {
+            var name = error && error.name; name = /^[A-Za-z][A-Za-z0-9_]{1,50}$/.test(String(name || '')) ? ' (' + name + ')' : '';
+            finish('The TV did not apply this track' + name + '. Try another track or source.');
+        }
+        function verify() {
+            if (!current()) return;
+            var actual;
+            try { actual = nativeTrackIndex(type); } catch (readError) { actual = null; }
+            if (actual === index) {
+                // Returning straight to PAUSED can cancel an audio decoder change on older TVs.
+                if (resumed && wasPaused && Date.now() - selectedAt < 350) return later(verify, 100);
+                return finish();
+            }
+            if (Date.now() - selectedAt >= 2200) return finish('The TV did not confirm this track. Requested ' + index + '; TV reports ' + (actual === null ? 'no readable track' : actual) + '. Try another source.');
+            if (tries === 1 && Date.now() - selectedAt >= 650) {
+                try { if (type !== 'AUDIO' || state() === 'PLAYING') { av.setSelectTrack(type, index); tries++; } } catch (retryError) { return reportFailure(retryError); }
+            }
+            later(verify, 100);
+        }
+        function select() {
+            if (!current()) return;
+            try {
+                var available = av.getTotalTrackInfo().some(function (track) { return track.type === type && Number(track.index) === index; });
+                if (!available || !isFinite(index) || index < 0 || Math.floor(index) !== index) return finish('This track is no longer available. Close and reopen the menu.');
+                av.setSelectTrack(type, index); tries = 1; selectedAt = Date.now(); later(verify, 100);
+            } catch (selectError) { reportFailure(selectError); }
+        }
+        function waitPlaying() {
+            try { if (state() === 'PLAYING') return select(); } catch (stateError) { return reportFailure(stateError); }
+            if (Date.now() - started >= 1500) return finish('The TV did not resume for the audio change. Press Play and try again.');
+            later(waitPlaying, 100);
+        }
+        try {
+            var nativeState = state(); wasPaused = owner.paused || nativeState === 'PAUSED';
+            if (type === 'AUDIO' && nativeState !== 'PLAYING') { resumed = true; av.play(); later(waitPlaying, 100); }
+            else select();
+        } catch (startError) { reportFailure(startError); }
+    }
     function trackMenu(kind) {
         kind = kind === 'audio' ? 'audio' : 'subtitles';
         var body = openPlayerMenu(kind === 'audio' ? 'Audio' : 'Subtitles', kind === 'audio' ? 'audio' : 'tracks'); if (!body) return;
@@ -1007,17 +1094,17 @@
         }
         function focusChoice() { var chosen = list.querySelector('[aria-checked="true"]'); if (chosen) chosen.focus(); else focusFirst(list.children.length ? list : document.getElementById('track-menu')); }
         function disableText() {
-            cues = []; document.getElementById('subtitle').textContent = ''; clearTimeout(subtitleTimer);
+            cues = []; playback.nativeCue = null; document.getElementById('subtitle').textContent = ''; clearTimeout(subtitleTimer);
             if (playback.native) { try { nativePlayer().setSilentSubtitle(true); } catch (e) {} }
             else if (video.textTracks) for (var i = 0; i < video.textTracks.length; i++) video.textTracks[i].mode = 'disabled';
         }
         if (kind === 'subtitles') choice('Off', 'No subtitles', playback.subtitleChoice === 'off', function () {
-            disableText(); playback.subtitleChoice = 'off'; closeTrackMenu(); playbackStatus('Subtitles off');
+            playback.subtitleRequest = (playback.subtitleRequest || 0) + 1; disableText(); playback.subtitleChoice = 'off'; closeTrackMenu(); playbackStatus('Subtitles off');
         });
         var tracks = [], selectedIndex = null;
         if (playback.native) {
             try { tracks = nativePlayer().getTotalTrackInfo().filter(function (t) { return t.type === type; }); } catch (e) {}
-            try { nativePlayer().getCurrentStreamInfo().forEach(function (t) { if (t.type === type) selectedIndex = t.index; }); } catch (e) {}
+            try { nativePlayer().getCurrentStreamInfo().forEach(function (t) { if (t.type === type) selectedIndex = Number(t.index); }); } catch (e) {}
         } else {
             var browserTracks = kind === 'audio' ? video.audioTracks : video.textTracks;
             if (browserTracks) for (var i = 0; i < browserTracks.length; i++) {
@@ -1028,43 +1115,41 @@
         }
         tracks.forEach(function (track, index) {
             var title = C.trackLabel(track).replace(/^Unknown language/, (kind === 'audio' ? 'Audio track ' : 'Subtitle track ') + (index + 1));
-            var selected = kind === 'audio' ? (playback.audioIndex === undefined ? selectedIndex === track.index : playback.audioIndex === track.index) : playback.subtitleChoice === 'track:' + track.index || (playback.subtitleChoice === 'default' && selectedIndex === track.index);
-            choice(title, kind === 'audio' ? 'Embedded audio' : 'Embedded subtitles', selected, function () {
-                if (!current()) return;
-                var wasPaused = playback.paused;
-                try {
-                    if (kind === 'audio') {
-                        if (playback.native) {
-                            // On 2017 TVs AUDIO switching requires PLAYING; restore a paused viewer afterward.
-                            if (wasPaused) nativePlayer().play();
-                            nativePlayer().setSelectTrack('AUDIO', track.index);
-                            if (wasPaused) nativePlayer().pause();
-                        } else for (var j = 0; j < video.audioTracks.length; j++) video.audioTracks[j].enabled = j === track.index;
-                        playback.audioIndex = track.index;
-                    } else {
-                        disableText();
-                        if (playback.native) { nativePlayer().setSelectTrack('TEXT', track.index); nativePlayer().setSilentSubtitle(false); }
-                        else video.textTracks[track.index].mode = 'showing';
-                        playback.subtitleChoice = 'track:' + track.index;
-                    }
-                    closeTrackMenu(); playbackStatus((kind === 'audio' ? 'Audio: ' : 'Subtitles: ') + title);
-                } catch (error) {
-                    if (wasPaused && playback.native && kind === 'audio') { try { nativePlayer().pause(); } catch (pauseError) {} }
-                    message('This player cannot switch to that track for this stream.', true, body);
+            var selected = kind === 'audio' ? selectedIndex === Number(track.index) : (playback.subtitleChoice === 'default' || /^track:/.test(playback.subtitleChoice)) && selectedIndex === Number(track.index);
+            var control = choice(title, kind === 'audio' ? 'Embedded audio' : 'Embedded subtitles', selected, function () {
+                if (!current() || playback.trackChange) return;
+                if (kind === 'subtitles') playback.subtitleRequest = (playback.subtitleRequest || 0) + 1;
+                function applied() {
+                    if (!current()) return;
+                    if (kind === 'subtitles') { disableText(); playback.subtitleChoice = 'track:' + Number(track.index); }
+                    closeTrackMenu(); playbackStatus((kind === 'audio' ? 'Audio selected by TV: ' : 'Subtitle track selected by TV: ') + title);
                 }
+                if (playback.native) return switchNativeTrack(type, track.index, body, applied);
+                try {
+                    var selectedTracks = kind === 'audio' ? video.audioTracks : video.textTracks;
+                    if (!selectedTracks || !selectedTracks[track.index]) throw new Error('Track unavailable');
+                    if (kind === 'audio') for (var j = 0; j < selectedTracks.length; j++) selectedTracks[j].enabled = j === track.index;
+                    else { disableText(); selectedTracks[track.index].mode = 'showing'; }
+                    var accepted = kind === 'audio' ? selectedTracks[track.index].enabled : selectedTracks[track.index].mode === 'showing';
+                    if (!accepted) throw new Error('Track unchanged');
+                    if (kind !== 'audio') playback.subtitleChoice = 'track:' + track.index;
+                    closeTrackMenu(); playbackStatus((kind === 'audio' ? 'Audio: ' : 'Subtitles: ') + title);
+                } catch (error) { message('The browser did not apply this track. Try another source.', true, body); }
             });
+            control.setAttribute('data-native-track', String(track.index));
         });
         if (kind === 'audio') {
             if (!tracks.length) message('No switchable audio tracks are exposed by this stream and player. Choose a source with your preferred language.', false, body);
             focusChoice(); return;
         }
-        var seen = {}, pending = 0, note = message('Loading addon subtitles…', false, body);
+        var seen = {}, pending = 0, note = trackNotice(body, 'Loading addon subtitles…');
         function subtitleButton(sub, provider) {
             if (!/^https?:\/\//i.test(sub.url || '') || seen[sub.url]) return; seen[sub.url] = true;
             choice(C.languageName(sub.lang || sub.language), 'Addon subtitles · ' + (provider || 'Stream'), playback.subtitleChoice === sub.url, function () {
-                if (!current()) return; note.textContent = 'Loading selected subtitles…';
+                if (!current() || playback.trackChange) return;
+                var requestId = playback.subtitleRequest = (playback.subtitleRequest || 0) + 1; note.textContent = 'Loading selected subtitles…';
                 request(sub.url, null, function (err, text) {
-                    if (!current()) return;
+                    if (!current() || playback.subtitleRequest !== requestId) return;
                     if (err) { note.textContent = err.message; note.className = 'error'; return; }
                     var parsed = C.subtitleCues(text);
                     if (!parsed.length) { note.textContent = 'Use an SRT or WebVTT subtitle file.'; note.className = 'error'; return; }

@@ -2,6 +2,14 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 3.1.4: apply and verify audio/subtitle changes
+
+Native track selection now waits for AVPlay state and the selected track reported by getCurrentStreamInfo. A paused audio change resumes first, waits for PLAYING, sends a numeric native track index, and allows the decoder change to settle before restoring pause. An ignored request is retried once. The menu stays open while switching or on failure, with a visible status above the track list. Reopening Audio reads the TV's active track instead of a cached requested language.
+
+Embedded subtitle text uses AVPlay callbacks with Samsung's native subtitle renderer kept silent, so the app's subtitle layer handles visibility consistently. Off blocks callbacks, captions remain visible while paused, and stale addon subtitle downloads cannot override a newer choice. Audio changes retain external captions. Image subtitle callbacks explain that an SRT/WebVTT addon subtitle is needed.
+
+Keep the same `Ws3r211/stremio-lite-tizenbrew@v3.1.0` Auto entry. Check for updates and choose Reopen app to run 3.1.4. Tests simulate delayed PLAYING state, delayed decoder changes, ignored requests, errors, cancellation, pause restoration, native subtitle callbacks and racing external downloads. Reported track confirmation cannot independently establish the audible language of a real provider file; physical-TV confirmation remains necessary.
+
 ## Version 3.1.3: complete player remote paths and Home banner return
 
 The player uses explicit remote focus paths. Left/Right moves through Pause, back/forward 10 seconds, Go to time, Audio, Subtitles and Stop without jumping onto the timeline. Up goes from a button to the timeline, then Back; Down returns to the last playback button. On the timeline, Left/Right previews a seek and OK commits it. Hidden controls reopen safely. Track menus scroll their own contents and keep arrow focus inside the dialog, including long audio lists. Playback error actions are reachable by remote too.

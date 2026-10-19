@@ -78,3 +78,5 @@ html.native-playing{background:transparent}#player-retry{pointer-events:auto;mar
 @media(max-width:1400px){.settings-view h1{font-size:34px;margin-bottom:22px}.settings-content{margin-left:265px;font-size:20px}.settings-sections{top:195px;width:225px}.settings-sections button{font-size:20px;padding:13px 15px}.settings-sections p{font-size:15px;margin-top:12px}.settings-content .panel{padding:22px}.settings-content h2{font-size:27px}.settings-content h3{font-size:22px}.settings-content button,.settings-content input,.settings-content select{font-size:20px;min-height:48px;padding:11px 15px}.settings-content .catalog-setting-label span{font-size:21px}.settings-content .catalog-setting-label small{font-size:17px}}
 
 .buffer-choices button{display:block;width:100%}.buffer-choices button[aria-checked="true"]{background:#554184;border-color:#9b83cf}
+
+#track-menu [data-track-notice]{flex-shrink:0;margin:0;padding:14px 24px;font-size:18px;line-height:1.45;border-bottom:1px solid #303d53;background:#172236}

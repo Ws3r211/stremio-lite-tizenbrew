@@ -36,7 +36,7 @@ const {chromium}=require('playwright'),createServer=require('../service.js');
     for(let i=0;i<4;i++)await key('ArrowRight');await focusIs('audio');await key('Enter');
     await page.getByRole('dialog',{name:'Audio',exact:true}).waitFor();
     for(let i=0;i<17;i++){await key('ArrowDown');await inView('#track-menu :focus');}
-    assert.match(await active(),/Dutch/);await page.screenshot({path:path.join(root,'artifacts/remote-audio-'+viewport.width+'.jpg')});await key('Enter');await focusIs('audio');assert.equal(await page.evaluate(()=>audioIndex),17);
+    assert.match(await active(),/Dutch/);await page.screenshot({path:path.join(root,'artifacts/remote-audio-'+viewport.width+'.jpg')});await key('Enter');await page.waitForFunction(()=>document.getElementById('track-menu').className==='hidden');await focusIs('audio');assert.equal(await page.evaluate(()=>audioIndex),17);
     await key('ArrowUp');await focusIs('timeline');await key('ArrowUp');await focusIs('player-back');await key('ArrowDown');await focusIs('timeline');await key('ArrowDown');await focusIs('audio');
     await key('ArrowRight');await focusIs('tracks');await key('Enter');await page.getByRole('dialog',{name:'Subtitles',exact:true}).waitFor();
     // The subtitle appearance/timing controls must be reachable and stay inside the dialog.

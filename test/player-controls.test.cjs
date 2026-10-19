@@ -51,6 +51,7 @@ const {chromium}=require('playwright'),createServer=require('../service.js');
         await page.getByRole('button',{name:'Pause / play',exact:true}).click();
         await page.getByRole('button',{name:'Audio',exact:true}).click();
         await page.getByRole('radio',{name:/Dutch.*AAC.*Stereo/}).click();
+        await page.waitForFunction(()=>document.getElementById('track-menu').className==='hidden');
         assert.equal(await page.evaluate(()=>nativePaused),true);
         assert.equal(await page.locator('#subtitle').textContent(),'English caption','audio switching must preserve external subtitles');
         assert.deepEqual(await page.evaluate(()=>avCalls.slice(-3)),[['play'],['track','AUDIO',5],['pause']]);
