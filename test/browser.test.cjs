@@ -8,7 +8,7 @@ async function run(browser, existingServer) {
     const server=existingServer||createServer({staticDir:path.join(__dirname,'../app')});
     if(!existingServer)await new Promise(r=>server.listen(17780,'127.0.0.1',r));
     const context=await browser.newContext({viewport:{width:1920,height:1080}});
-    const page=await context.newPage(), errors=[], calls=[];
+    const page=await context.newPage(), errors=[], calls=[], puts=[];
     page.on('pageerror',e=>errors.push(e.message));
     const movie={id:'ttTEST',type:'movie',name:'Fixture Movie',description:'A synthetic catalog item used for client tests.',year:'2026'};
     const series={id:'ttSERIES',type:'series',name:'Fixture Series',videos:[{id:'ttSERIES:1:2',season:1,episode:2,title:'Second'},{id:'ttSERIES:1:1',season:1,episode:1,title:'First'}]};
@@ -38,6 +38,7 @@ async function run(browser, existingServer) {
         else if(u.includes('/v2/create'))data={result:{code:'TEST-ONLY',link:'https://link.stremio.com/?code=TEST-ONLY'}};
         else if(u.includes('/v2/read'))data={result:{authKey:'synthetic-test-token'}};
         else if(u.endsWith('/addonCollectionGet'))data={result:{addons:[addon]}};
+        else if(u.endsWith('/datastorePut')){const b=request.body,item=b&&b.changes&&b.changes[0];if(!item||b.collection!=='libraryItem'||!item._id||!item._mtime||!item.state||typeof item.state.timeOffset!=='number'||!('video_id' in item.state))throw new Error('Incomplete progress write '+JSON.stringify(b));puts.push(item);data={result:{success:true}};}
         else if(u.endsWith('/datastoreGet'))data={result:[{_id:movie.id,type:movie.type,name:movie.name,removed:false,temp:false}]};
         else if(u.endsWith('/manifest.json'))data=addon.manifest;
         else throw new Error('Uncovered fixture request '+u);
@@ -83,6 +84,8 @@ async function run(browser, existingServer) {
         await page.evaluate(()=>window.avListener.oncurrentplaytime(3000));
         assert.equal(await page.locator('#subtitle').textContent(),'Hello TV');
         await page.keyboard.press('Escape');assert(await page.locator('#player').isHidden());
+        await page.waitForFunction(()=>true);await page.waitForTimeout(200);
+        assert(puts.some(x=>x.state.video_id===x._id&&x.state.timeOffset===3000&&x.state.duration===120000&&x.temp===false),'stopping must write the position to the Stremio library: '+JSON.stringify(puts));
         await page.getByRole('button',{name:'Discover',exact:true}).click();
         await page.getByRole('button',{name:'Fixture Series'}).first().click();
         await page.getByRole('button',{name:/^1\. First/}).waitFor();

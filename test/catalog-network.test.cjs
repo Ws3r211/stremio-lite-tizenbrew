@@ -6,7 +6,7 @@ const createServer = require('../service.js');
 (async () => {
     let serviceFails = false, directFails = false, accountCalls = 0;
     const server = createServer({staticDir:path.join(__dirname,'../app'), upstream:(url,method,body,cb) => {
-        if (method === 'POST') { accountCalls++; return cb(new Error('Network or certificate request failed (CERT_HAS_EXPIRED).')); }
+        if (method === 'POST') { if (/addonCollectionGet/.test(url)) accountCalls++; return cb(new Error('Network or certificate request failed (CERT_HAS_EXPIRED).')); }
         if (serviceFails) return cb(new Error('Network or certificate request failed (CERT_HAS_EXPIRED).'));
         cb(null,JSON.stringify({metas:[{id:'tmdb:123',type:'movie',name:'Service catalog'}]}));
     }});

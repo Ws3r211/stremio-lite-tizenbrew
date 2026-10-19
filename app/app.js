@@ -4,11 +4,15 @@
     var C = window.StremioLite, view = document.getElementById('view');
     var SERVICE = 'http://127.0.0.1:17780', API = 'https://api.strem.io/api/';
     var LINK = 'https://link.stremio.com/api/v2/';
+    var APP_VERSION = '3.2.0', REPOSITORY = 'Ws3r211/stremio-lite-tizenbrew';
+    var RELEASES = 'https://api.github.com/repos/' + REPOSITORY + '/releases/latest';
+    // The installed widget talks to addons directly; the local service only backs desktop tests.
+    var PACKAGED = location.protocol === 'file:';
     var CINEMETA = {transportUrl: 'https://v3-cinemeta.strem.io/manifest.json', manifest: {
         id: 'com.linvo.cinemeta', name: 'Cinemeta', types: ['movie', 'series'], resources: ['catalog', 'meta'],
         catalogs: [{id: 'top', type: 'movie', name: 'Movies', extra: [{name: 'search'}, {name: 'skip'}]}, {id: 'top', type: 'series', name: 'Series', extra: [{name: 'search'}, {name: 'skip'}]}]
     }};
-    var session = null, serviceVersion = '', epoch = 0, currentPage = null, previous = [], linkTimer = null, linkSerial = 0;
+    var session = null, epoch = 0, currentPage = null, previous = [], linkTimer = null, linkSerial = 0;
     var playback = null, playbackEpoch = 0, cues = [], barTimer = null, subtitleTimer = null;
     var catalogCache = {}, heroCache = {}, discoverState = {type: 'all', row: 0, card: 0}, discoverTick = null;
     var homeScroll = null, heroTimer = null;
@@ -16,8 +20,9 @@
     var searchState = {query: '', type: 'all'};
     function read(key, fallback) { try { return JSON.parse(localStorage.getItem('sl.' + key)) || fallback; } catch (e) { return fallback; } }
     function save(key, value) { try { localStorage.setItem('sl.' + key, JSON.stringify(value)); return true; } catch (e) { status('TV storage is full; settings could not be saved.'); return false; } }
-    var authKey = read('auth', ''), addons = read('addons', [CINEMETA]), library = [], progress = read('progress', {});
-    var hiddenCatalogs = read('hiddenCatalogs', []);
+    var authKey = read('auth', ''), addons = read('addons', [CINEMETA]), library = [], libraryItems = {}, progress = read('progress', {});
+    var hiddenCatalogs = read('hiddenCatalogs', []), pendingUpdate = read('pendingUpdate', null);
+    if (pendingUpdate && C.compareVersions(pendingUpdate.version, APP_VERSION) <= 0) pendingUpdate = null;
     if (!Array.isArray(hiddenCatalogs)) hiddenCatalogs = [];
     if (!Array.isArray(addons) || !addons.length) addons = [CINEMETA];
     var supportedAddons = addons.filter(function (addon) { return !C.isLocalFiles(addon); });
@@ -101,6 +106,8 @@
     function goBack() {
         if (playback) { stopPlayback(); return; }
         if (previous.length) previous.pop()();
+        // A packaged widget has no history to return to; leave the app instead.
+        else if (location.protocol === 'file:' && window.tizen) { try { tizen.application.getCurrentApplication().exit(); } catch (e) { home(); } }
         else { try { window.history.back(); } catch (e) { home(); } }
     }
     function nav(active) {
@@ -143,6 +150,24 @@
             if (meta.type === 'library') b.appendChild(node('span', 'Type not provided by addon', 'card-source'));
         });
         if (!grid.children.length) message('No titles returned.', false, parent);
+    }
+    function continueWatching() {
+        var seen = {}, out = [];
+        Object.keys(progress).map(function (videoId) { return {videoId: videoId, p: progress[videoId]}; }).filter(function (x) {
+            return x.p && x.p.metaId && x.p.metaId !== 'blender-bbb' && x.p.name && (x.p.type === 'movie' || x.p.type === 'series') && x.p.seconds > 10 && (!x.p.duration || x.p.seconds < x.p.duration - 20);
+        }).sort(function (a, b) { return b.p.date - a.p.date; }).forEach(function (x) {
+            if (seen[x.p.metaId] || out.length >= 20) return; seen[x.p.metaId] = true;
+            out.push({id: x.p.metaId, type: x.p.type, name: x.p.name, poster: x.p.poster});
+        });
+        return out;
+    }
+    function resumeFor(metaId) {
+        var best = null;
+        Object.keys(progress).forEach(function (videoId) {
+            var p = progress[videoId];
+            if (p && p.metaId === metaId && p.seconds > 10 && (!p.duration || p.seconds < p.duration - 20) && (!best || p.date > best.p.date)) best = {videoId: videoId, p: p};
+        });
+        return best;
     }
     function home(restore) {
         nav('Discover'); var mine = begin('Discover', function () { home(true); }), choices = C.catalogs(addons, false);
@@ -299,19 +324,22 @@
             });
             pump();
         }
+        var watching = continueWatching().filter(function (meta) { return discoverState.type === 'all' || meta.type === discoverState.type; });
+        if (watching.length) choices.unshift({addon: {manifest: {name: authKey ? 'Synced with your Stremio account' : 'Saved on this TV'}}, catalog: {id: 'continue', type: 'progress', name: 'Continue watching'}, items: watching});
         choices.forEach(function (choice, index) {
             var section = node('section', null, 'catalog-row'), head = node('div', null, 'shelf-heading');
             var title = choice.catalog.name || (choice.catalog.type === 'series' ? 'Popular series' : 'Trending movies');
             var heading = node('h2', title); heading.id = 'catalog-' + index; head.appendChild(heading);
             head.appendChild(node('span', choice.addon.manifest.name, 'catalog-provider'));
-            head.appendChild(node('span', choice.catalog.type === 'series' ? 'Series' : choice.catalog.type === 'movie' ? 'Movies' : choice.catalog.type, 'catalog-kind'));
+            head.appendChild(node('span', choice.items ? 'Movies & series' : choice.catalog.type === 'series' ? 'Series' : choice.catalog.type === 'movie' ? 'Movies' : choice.catalog.type, 'catalog-kind'));
             if (index === 0) head.appendChild(filters);
             section.setAttribute('aria-labelledby', heading.id); section.appendChild(head);
             var track = node('div', null, 'shelf-track'); track.setAttribute('data-row-index', String(index)); section.appendChild(track); shelves.appendChild(section);
-            var key = C.resourceURL(choice.addon, 'catalog', choice.catalog.type, choice.catalog.id);
+            var key = choice.items ? 'continue-watching' : C.resourceURL(choice.addon, 'catalog', choice.catalog.type, choice.catalog.id);
             var row = {index: index, choice: choice, section: section, track: track, key: key, items: [], offset: 0, visible: restore && index === discoverState.row ? Math.max(12, discoverState.card + 1) : 12};
             rows.push(row); var cached = catalogCache[key];
-            if (cached && Date.now() - cached.date < 300000) {
+            if (choice.items) { row.items = choice.items; row.loaded = true; rowCards(row); }
+            else if (cached && Date.now() - cached.date < 300000) {
                 row.items = cached.items; row.offset = cached.offset; row.hasMore = cached.hasMore; row.loaded = true; rowCards(row);
             } else button('Load catalog', function () { loadRow(row); }, track);
             track.onscroll = function () { loadImages(row); };
@@ -437,8 +465,19 @@
                             if (release.upcoming) episode.appendChild(node('span', 'Scheduled date from addon; streams may not be available yet.', 'episode-note'));
                         });
                     }
+                    var resume = resumeFor(item.id), resumeVideo = resume && videos.filter(function (v) { return v.id === resume.videoId; })[0];
+                    if (resumeVideo) {
+                        var resumeButton = button('Resume S' + (resumeVideo.season || 0) + 'E' + (resumeVideo.episode || 0) + ' · ' + formatTime(resume.p.seconds), function () {
+                            streams(item, resumeVideo.id, resumeVideo.title || resumeVideo.name || item.name);
+                        }, null);
+                        resumeButton.className = 'primary'; actions.insertBefore(resumeButton, season);
+                        season.value = String(resumeVideo.season || 0);
+                    }
                     season.onchange = episodes; episodes();
-                } else button('Find streams', function () { streams(item, item.id, item.name); }, actions);
+                } else {
+                    var moviePosition = progress[item.id] && progress[item.id].seconds > 10 ? progress[item.id] : null;
+                    button(moviePosition ? 'Resume from ' + formatTime(moviePosition.seconds) : 'Find streams', function () { streams(item, item.id, item.name); }, actions);
+                }
                 focusFirst(actions); status('Select an episode or find streams.');
             }
             var providers = addons.filter(function (a) { return C.supports(a, 'meta', meta.type, meta.id); }), i = 0;
@@ -468,18 +507,23 @@
                     if (epoch !== mine) return;
                     if (err) failures++;
                     else (data.streams || []).forEach(function (stream) {
-                        total++; var can = C.playable(stream);
+                        total++; var can = C.playable(stream), fit = C.compatibility(stream); stream._slAddon = addon.transportUrl;
                         var b = button((stream.name || addon.manifest.name) + '\n' + (stream.description || stream.title || 'Video stream'), function () {
                             if (!can.ok) return status(can.reason, true);
                             play(stream, meta, id, title);
-                        }, list);
+                        }, null);
                         var info = C.streamInfo(stream);
                         if (info.tags.length) b.appendChild(node('span', info.tags.join(' · '), 'stream-tags'));
-                        info.warnings.forEach(function (warning) { b.appendChild(node('span', warning, 'stream-warning')); });
-                        b.appendChild(node('small', can.ok ? 'Direct video · Select to play' : can.reason));
+                        if (fit.rank === 1 || fit.rank === 2) b.appendChild(node('span', (fit.rank === 2 ? 'Not recommended · ' : '') + fit.label, 'stream-warning'));
+                        info.warnings.forEach(function (warning) { if (!/Dolby Vision/.test(warning)) b.appendChild(node('span', warning, 'stream-warning')); });
+                        b.appendChild(node('small', can.ok ? (fit.rank === 0 ? 'Plays on this TV · Select to play' : 'Direct video · Select to play') : can.reason));
+                        // Best-fitting sources first; addon order is kept within each rank.
+                        b.setAttribute('data-rank', String(fit.rank));
+                        var after = null; Array.prototype.some.call(list.children, function (other) { if (Number(other.getAttribute('data-rank')) > fit.rank) { after = other; return true; } return false; });
+                        list.insertBefore(b, after);
                     });
                     if (--pending) return;
-                    status(total + ' sources' + (failures ? ' · ' + failures + ' addons failed' : ''));
+                    status(total + ' sources · best for this TV first' + (failures ? ' · ' + failures + ' addons failed' : ''));
                     if (!total) message('No streams returned by your installed addons.', false, list);
                     focusFirst(list);
                 });
@@ -489,10 +533,48 @@
     }
     function loadLibrary(cb) {
         account('datastoreGet', {authKey: authKey, collection: 'libraryItem', all: true, ids: []}, function (err, items) {
-            if (!err) library = (Array.isArray(items) ? items : []).filter(function (x) { return !x.removed && !x.temp; }).map(function (x) {
-                x.id = x._id || x.id; return x;
-            });
+            if (!err) {
+                items = (Array.isArray(items) ? items : []).filter(function (x) { return x && x._id; });
+                libraryItems = {}; items.forEach(function (x) { libraryItems[x._id] = x; });
+                library = items.filter(function (x) { return !x.removed && !x.temp; }).map(function (x) { x.id = x._id; return x; });
+                mergeAccountProgress(items);
+            }
             cb(err);
+        });
+    }
+    function mergeAccountProgress(items) {
+        // The newest position wins, whether it came from this TV or another Stremio app.
+        var changed = false;
+        items.forEach(function (item) {
+            var state = item.state || {}, videoId = state.video_id, local, when;
+            if (!videoId || item.type === 'other') return;
+            when = Date.parse(state.lastWatched || item._mtime) || 0; local = progress[videoId];
+            if (local && local.date >= when) return;
+            if (state.timeOffset > 0) {
+                progress[videoId] = {seconds: state.timeOffset / 1000, duration: (state.duration || 0) / 1000, date: when, metaId: item._id, type: item.type, name: item.name, poster: item.poster || ''};
+                changed = true;
+            } else if (local) { delete progress[videoId]; changed = true; }
+        });
+        if (changed) save('progress', progress);
+    }
+    function pushProgress() {
+        if (!authKey || !playback || !playback.meta || !playback.meta.id || playback.meta.id === 'blender-bbb' || !(playback.duration > 0)) return;
+        var owner = playback, meta = owner.meta, now = new Date().toISOString(), old = libraryItems[meta.id], item = {}, k;
+        if (old) { for (k in old) if (Object.prototype.hasOwnProperty.call(old, k)) item[k] = old[k]; }
+        else item = {_id: meta.id, name: meta.name || owner.id, type: meta.type, poster: meta.poster || null, posterShape: 'poster', removed: true, temp: true, _ctime: now,
+            behaviorHints: {defaultVideoId: meta.type === 'movie' ? meta.id : null, featuredVideoId: null, hasScheduledVideos: false}};
+        var state = item.state || {}, played = Math.max(0, Math.min(120, owner.seconds - (owner.pushedSeconds === undefined ? owner.seconds : owner.pushedSeconds))) * 1000;
+        var finished = owner.seconds >= owner.duration * 0.9, firstFinish = finished && !owner.countedFinish;
+        if (firstFinish) owner.countedFinish = true;
+        owner.pushedSeconds = owner.seconds; owner.pushedAt = Date.now();
+        // Write every field Stremio apps expect; a partial state can break other clients.
+        item.state = {lastWatched: now, timeWatched: (state.timeWatched || 0) + played, timeOffset: finished ? 0 : Math.round(owner.seconds * 1000),
+            overallTimeWatched: (state.overallTimeWatched || 0) + played, timesWatched: (state.timesWatched || 0) + (firstFinish ? 1 : 0),
+            flaggedWatched: finished && meta.type === 'movie' ? 1 : (state.flaggedWatched || 0), duration: Math.round(owner.duration * 1000),
+            video_id: owner.id, watched: state.watched === undefined ? null : state.watched, noNotif: !!state.noNotif};
+        item._mtime = now; libraryItems[meta.id] = item;
+        account('datastorePut', {authKey: authKey, collection: 'libraryItem', changes: [item]}, function (err) {
+            if (err && playback === owner) owner.syncFailed = true;
         });
     }
     function libraryPage() {
@@ -502,7 +584,7 @@
         loadLibrary(function (err) {
             if (epoch !== mine) return;
             if (err) return status(err.message, true);
-            cards(library); focusFirst(); status(library.length + ' library titles · watch progress is saved locally on this TV');
+            cards(library); focusFirst(); status(library.length + ' library titles · watch progress synced with your account');
         });
     }
     function syncAddons(cb) {
@@ -625,25 +707,23 @@
             button('Refresh account addons', function () { status('Importing addons…'); syncAddons(function (err) { if (epoch !== mine) return; settings(); status(err ? err.message : 'Addons refreshed.', !!err); }); }, accountBox);
             button('Sign out and clear imported addons', function () { authKey = ''; addons = [CINEMETA]; library = []; hiddenCatalogs = []; save('auth', ''); save('addons', addons); pruneHiddenCatalogs(); settings(); }, accountBox);
         } else button('Sign in with Stremio', function () { this.disabled = true; linkAccount(accountBox, mine, this); }, accountBox);
-        message('The account session and configured addon URLs are stored on this TV. Sign out removes them. Watch progress stays local; this client does not write to your Stremio account.', false, accountBox);
+        message('The account session and configured addon URLs are stored on this TV. Sign out removes them. Watch progress is synced with your Stremio account, so Continue watching matches your other Stremio apps.', false, accountBox);
         addSection(accountBox, 'account', 'Stremio account');
-        if (window.StremioAuto) {
-            var updates = node('section', null, 'panel'); updates.appendChild(node('h2', 'Automatic updates')); addSection(updates, 'updates', 'Automatic updates');
-            message('Updates are checked when you open this app. Your video is never interrupted. Keep this same TizenBrew module for future fixes.', false, updates);
-            var updateStatus = message('Installed version ' + window.StremioAuto.version, false, updates);
-            var updateEngine = message('', false, updates);
-            function showUpdate(data) {
-                if (epoch !== mine) return;
-                updateStatus.textContent = 'Installed ' + data.installed + (data.available ? ' · ' + data.available + ' ready for next launch' : ' · No update waiting') + (data.persistent === false ? ' · TV update cache unavailable; bundled fallback retained' : '') + (data.notice ? ' · ' + data.notice : '');
-                updateEngine.textContent = data.updaterVersion >= 2 ? 'Updater 2 · Direct GitHub checks; no branch CDN cache.' : 'Legacy updater: replace the old Auto module once with Ws3r211/stremio-lite-tizenbrew@v3.1.7 and fully restart the TV. This upgrades the launcher for future updates.';
-            }
-            xhr('GET', SERVICE + '/auto/status', null, function (err, data) { if (!err) showUpdate(data); });
-            button('Check for updates', function () {
-                var b = this; b.disabled = true; updateStatus.textContent = 'Checking for updates…';
-                xhr('POST', SERVICE + '/auto/check', null, function (err, data) { if (epoch !== mine) return; b.disabled = false; if (err) updateStatus.textContent = 'Could not check for updates. Your installed version is kept.'; else showUpdate(data); }, false, {'X-Stremio-Auto': window.StremioAuto.token});
-            }, updates);
-            button('Reopen app', function () { window.location.reload(); }, updates);
+        var updates = node('section', null, 'panel'); updates.appendChild(node('h2', 'Updates')); addSection(updates, 'updates', 'Updates');
+        var updateStatus = message('Installed version ' + APP_VERSION + '.', false, updates);
+        var updateHelp = message('', false, updates);
+        function showUpdate(err, info) {
+            if (epoch !== mine) return;
+            if (err) { updateStatus.textContent = 'Installed version ' + APP_VERSION + ' · Could not reach GitHub: ' + err.message; updateHelp.textContent = ''; return; }
+            updateStatus.textContent = 'Installed version ' + APP_VERSION + (info.newer ? ' · Version ' + info.version + ' is available.' : ' · This is the latest version.');
+            updateHelp.textContent = info.newer ? updateSteps(info) : '';
         }
+        button('Check for updates', function () {
+            var b = this; b.disabled = true; updateStatus.textContent = 'Checking GitHub for a new version…';
+            checkForUpdate(true, function (err, info) { b.disabled = false; showUpdate(err, info); });
+        }, updates);
+        message('The TV cannot install updates by itself. A new version is installed from your computer with TizenBrew Installer → Install from GitHub → ' + REPOSITORY + '. Your account, addons and settings stay on the TV.', false, updates);
+        if (pendingUpdate) showUpdate(null, pendingUpdate);
         homeCatalogSettings(); addSection(document.getElementById('home-catalogs'), 'catalogs', 'Home catalogs');
         var addonBox = node('div', null, 'panel'); addSection(addonBox, 'addons', 'Content addons'); addonBox.appendChild(node('h2', 'Content addons'));
         message('Local Files is excluded because its desktop Stremio service is unavailable in this TV client.', false, addonBox);
@@ -668,6 +748,19 @@
                 if (!found) addons.push({transportUrl: target, manifest: manifest}); save('addons', addons); settings(); status('Addon ready.');
             });
         };
+        var languageBox = node('section', null, 'panel'); addSection(languageBox, 'languages', 'Languages'); languageBox.appendChild(node('h2', 'Languages'));
+        message('Chosen automatically when a video starts. Remember last choice uses the language you last picked in the player.', false, languageBox);
+        var languages = ['English', 'Dutch', 'German', 'French', 'Spanish', 'Italian', 'Portuguese', 'Turkish', 'Polish', 'Japanese', 'Korean'];
+        [['audio', 'Audio language', [['last', 'Remember last choice'], ['default', 'File default']]], ['subtitles', 'Subtitle language', [['last', 'Remember last choice'], ['off', 'Off']]]].forEach(function (group) {
+            var key = group[0] === 'audio' ? 'audioLanguage' : 'subtitleLanguage', choicesBox = node('div', null, 'buffer-choices language-choices'), entries = [];
+            languageBox.appendChild(node('h3', group[1])); choicesBox.setAttribute('role', 'radiogroup'); choicesBox.setAttribute('aria-label', group[1]); languageBox.appendChild(choicesBox);
+            group[2].concat(languages.map(function (name) { return [name, name]; })).forEach(function (entry) {
+                var b = button(entry[1], function () { save(key, entry[0]); paint(); status(group[1] + ': ' + entry[1]); }, choicesBox);
+                b.setAttribute('role', 'radio'); entries.push({value: entry[0], button: b});
+            });
+            function paint() { entries.forEach(function (entry) { entry.button.setAttribute('aria-checked', String(entry.value === read(key, 'last'))); }); }
+            paint();
+        });
         var testBox = node('div', null, 'panel'); addSection(testBox, 'playback', 'Playback check'); testBox.appendChild(node('h2', 'Playback check'));
         testBox.appendChild(node('h3', 'Streaming buffer'));
         var bufferChoices = node('div', null, 'buffer-choices'); bufferChoices.id = 'buffer-mode';
@@ -684,15 +777,43 @@
         }
         refreshBuffers();
         message('TV default lets Samsung manage buffering and memory. Extra buffering is optional and may use more memory or delay startup. If a source still fails or buffers, try a lower bitrate without Dolby Vision. Buffer controls apply to Samsung AVPlay.', false, testBox);
+        testBox.appendChild(node('h3', 'Autoplay next episode'));
+        var autoplayBox = node('div', null, 'buffer-choices'); autoplayBox.setAttribute('role', 'radiogroup'); autoplayBox.setAttribute('aria-label', 'Autoplay next episode'); testBox.appendChild(autoplayBox);
+        var autoplayButtons = [['on', 'On · 10 second countdown'], ['off', 'Off']].map(function (entry) {
+            var b = button(entry[1], function () { save('autoplayNext', entry[0]); paintAutoplay(); status('Autoplay next episode: ' + entry[1]); }, autoplayBox);
+            b.setAttribute('role', 'radio'); return {value: entry[0], button: b};
+        });
+        function paintAutoplay() { autoplayButtons.forEach(function (entry) { entry.button.setAttribute('aria-checked', String(entry.value === read('autoplayNext', 'on'))); }); }
+        paintAutoplay();
+        message('Near the end of an episode the next one is offered. It continues with a source from the same addon and release group when possible.', false, testBox);
         message('Test your player with Blender’s Big Buck Bunny MP4 before testing your own streams.', false, testBox);
         button('Play test video', function () {
             play({url: 'https://media.w3.org/2010/05/bunny/trailer.mp4'}, {type: 'movie', id: 'blender-bbb', name: 'Big Buck Bunny'}, 'blender-bbb', 'Big Buck Bunny · playback test');
         }, testBox);
-        message('Player: ' + (nativePlayer() ? 'Samsung AVPlay available' : 'HTML5 fallback; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local TizenBrew service ' + serviceVersion + ' connected' : 'direct requests; local service unavailable'), false, testBox);
-        if (!nativePlayer()) message('This page uses the browser player. Audio selection switches the track during playback and seeks to flush the TV buffer; the app cannot confirm the sound changed. If it did not, Reload source in the Audio menu restarts at your position. Actual track support depends on the TV and source.', false, testBox);
-        if (session && serviceVersion !== '3.1.8') message('The service is an older version. Fully restart the TV to load the updated service.', true, testBox);
+        message('Player: ' + (nativePlayer() ? 'Samsung AVPlay' : 'browser player; Samsung AVPlay unavailable') + ' · Network: ' + (session ? 'local test service' : 'direct requests'), false, testBox);
+        if (!nativePlayer()) message('Audio track switching needs Samsung AVPlay. Install Stremio Lite as an app on the TV instead of opening it in a browser or TizenBrew module.', true, testBox);
         var initial = content.querySelector('[data-settings-section="' + section + '"]') || accountBox;
-        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite 3.1.8 · unofficial client for older TVs');
+        focusFirst(initial); ensureVisible(document.activeElement); status('Stremio Lite ' + APP_VERSION + ' · unofficial client for older TVs');
+    }
+    function updateSteps(info) {
+        return 'To install ' + info.version + ': on your computer open TizenBrew Installer, connect to this TV, choose Install from GitHub and enter ' + REPOSITORY + '. Then reopen Stremio Lite.';
+    }
+    function checkForUpdate(force, cb) {
+        // Background checks run at most once a day; GitHub limits anonymous API calls per IP.
+        if (!force && Date.now() - Number(read('updateCheckedAt', 0)) < 86400000) return cb(null, pendingUpdate);
+        request(RELEASES, null, function (err, release) {
+            if (err) return cb(err);
+            var version = String(release && release.tag_name || '').replace(/^v/, '');
+            var hasWidget = (release.assets || []).some(function (asset) { return /\.wgt$/i.test(asset.name || ''); });
+            if (!/^\d+\.\d+\.\d+$/.test(version)) return cb(new Error('The latest release has no version number.'));
+            save('updateCheckedAt', Date.now());
+            pendingUpdate = {version: version, newer: hasWidget && C.compareVersions(version, APP_VERSION) > 0};
+            save('pendingUpdate', pendingUpdate.newer ? pendingUpdate : null);
+            cb(null, pendingUpdate);
+        });
+    }
+    function announceUpdate(err, info) {
+        if (!err && info && info.newer && !playback) status('Stremio Lite ' + info.version + ' is available · Settings → Updates');
     }
     function nativePlayer() { return window.webapis && window.webapis.avplay; }
     function formatTime(seconds) {
@@ -712,7 +833,7 @@
     function paintPause() {
         if (!playback) return;
         document.querySelector('#pause .button-label').textContent = playback.paused ? 'Play' : 'Pause';
-        document.querySelector('#pause use').setAttributeNS('http://www.w3.org/1999/xlink', 'href', (window.StremioAuto ? '#' : 'player-icons.svg#') + 'player-' + (playback.paused ? 'play' : 'pause'));
+        document.querySelector('#pause use').setAttributeNS('http://www.w3.org/1999/xlink', 'href', 'player-icons.svg#' + 'player-' + (playback.paused ? 'play' : 'pause'));
         document.getElementById('pause').setAttribute('aria-pressed', String(playback.paused));
     }
     function paintTimeline() {
@@ -748,6 +869,7 @@
         playback.seconds = seconds; playback.duration = duration;
         paintTimeline();
         if (seconds - playback.lastSaved > 10) { storeProgress(); playback.lastSaved = seconds; }
+        if (duration > 60 && duration - seconds <= 30 && seconds > 0 && !playback.seeking && playback.scrub === null) offerNextEpisode();
         if (!cues.length && playback.nativeCue && seconds >= playback.nativeCue.end) { playback.nativeCue = null; document.getElementById('subtitle').textContent = ''; }
         if (cues.length) {
             var text = '', i;
@@ -756,9 +878,11 @@
             document.getElementById('subtitle').textContent = text;
         }
     }
-    function storeProgress() {
+    function storeProgress(force) {
         if (!playback || (playback.preparing && !playback.seconds)) return;
-        progress[playback.id] = {seconds: playback.seconds || 0, duration: playback.duration || 0, date: Date.now()};
+        var meta = playback.meta || {};
+        progress[playback.id] = {seconds: playback.seconds || 0, duration: playback.duration || 0, date: Date.now(), metaId: meta.id, type: meta.type, name: meta.name, poster: meta.poster || ''};
+        if (force || !playback.pushedAt || Date.now() - playback.pushedAt > 60000) pushProgress();
         var keys = Object.keys(progress).sort(function (a, b) { return progress[b].date - progress[a].date; });
         keys.slice(100).forEach(function (key) { delete progress[key]; }); save('progress', progress);
     }
@@ -768,7 +892,7 @@
             if (playback && !playback.paused && !playback.preparing && !playback.seeking && !playback.buffering && !playback.failed && playback.scrub === null && document.getElementById('track-menu').className === 'hidden') document.getElementById('player-chrome').className = 'hidden';
         }, 6000);
     }
-    function play(stream, meta, id, title, startOver, audioRestart) {
+    function play(stream, meta, id, title, startOver) {
         var can = C.playable(stream); if (!can.ok) return status(can.reason, true);
         if (playback) stopPlayback(); var generation = ++playbackEpoch, av = nativePlayer(), video = document.getElementById('video');
         playback = {id: id, meta: meta, stream: stream, seconds: 0, duration: 0, lastSaved: 0, native: !!av, paused: false, preparing: true, stalls: 0, bufferEvents: 0, lastUISecond: -1, scrub: null, subtitleOffset: Number(read('subtitleOffset', 0)) || 0, subtitleChoice: 'default', subtitleSources: [], seeking: false, returnFocus: document.activeElement, returnScroll: window.pageYOffset};
@@ -777,7 +901,7 @@
         window.scrollTo(0, 0);
         document.body.className = 'playing'; document.getElementById('player').className = '';
         document.getElementById('playing-title').textContent = title; document.getElementById('track-menu').className = 'hidden';
-        document.getElementById('time').textContent = ''; document.getElementById('subtitle').textContent = ''; cues = [];
+        document.getElementById('time').textContent = ''; document.getElementById('subtitle').textContent = ''; cues = []; document.getElementById('next-episode').className = 'hidden';
         document.getElementById('subtitle').style.fontSize = Number(read('subtitleSize', 36)) + 'px';
         document.getElementById('player-engine').textContent = (av ? 'Samsung AVPlay' : 'HTML5') + ' · ' + (C.streamInfo(stream).tags.slice(0, 3).join(' · ') || 'Direct play');
         document.getElementById('track-scrim').className = 'hidden'; ++menuSerial;
@@ -785,11 +909,6 @@
         paintPause(); paintTimeline();
         playbackStatus('Preparing video…'); showBar(); document.getElementById('pause').focus();
         var resume = progress[id], resumeAt = !startOver && resume && resume.seconds > 10 && resume.seconds < resume.duration - 20 ? resume.seconds : 0;
-        if (!av && audioRestart) {
-            resumeAt = audioRestart.seconds;
-            playback.subtitleChoice = audioRestart.subtitleChoice; cues = audioRestart.cues;
-            playback.subtitleOffset = audioRestart.subtitleOffset; playback.subtitleSources = audioRestart.subtitleSources;
-        }
         document.getElementById('player-retry').onclick = function () { play(stream, meta, id, title, true); };
         document.getElementById('player-retry').className = 'hidden';
         function active() { return playback && generation === playbackEpoch && !playback.failed; }
@@ -801,7 +920,7 @@
             clearTimeout(playback.startTimer); clearTimeout(playback.seekTimer); clearInterval(playback.watchTimer);
             playback.preparing = false; playback.seeking = false;
             var timeout = /TIMEOUT/.test(code);
-            showBar(); playbackStatus('Playback failed' + code + (timeout ? '. The source stopped responding. Retry from the beginning or choose another source.' : /AUDIO_/.test(code) ? '. The browser could not reload the selected audio. Try another track or source. Return stops the player.' : '. Try a lower-bitrate source without Dolby Vision. Return stops the player.'));
+            showBar(); playbackStatus('Playback failed' + code + (timeout ? '. The source stopped responding. Retry from the beginning or choose another source.' : '. Try a lower-bitrate source without Dolby Vision. Return stops the player.'));
             paintTimeline(); document.getElementById('player-retry').className = '';
             if (playback.native) { try { av.stop(); } catch (failedStop) {} try { av.close(); } catch (failedClose) {} }
             else video.pause();
@@ -845,6 +964,7 @@
                         av.play(); if (!current() || handlingFailure) return;
                         try { av.setSilentSubtitle(true); } catch (subtitleModeError) {}
                         started = true; playback.preparing = false;
+                        setTimeout(applyLanguagePrefs, 800);
                         playback.lastProgressAt = Date.now();
                         playbackStatus(retried ? 'Playing · TV default buffering' : 'Playing');
                         try { updateTime(resumeAt || 0, av.getDuration() / 1000); } catch (timeError) {}
@@ -869,7 +989,7 @@
                         var second = Math.floor(ms / 250); if (second === playback.lastUISecond) return;
                         playback.lastUISecond = second; updateTime(ms / 1000, av.getDuration() / 1000);
                     },
-                    onstreamcompleted: function () { if (current()) stopPlayback(); }, onerror: nativeFailed,
+                    onstreamcompleted: function () { if (current()) finishPlayback(); }, onerror: nativeFailed,
                     onsubtitlechange: function (duration, text, type) {
                         if (!current() || playback.seeking || cues.length || playback.subtitleChoice === 'off') return;
                         if (String(type) === '1') { playbackStatus('This embedded subtitle uses images. Try addon SRT or WebVTT subtitles.'); return; }
@@ -903,49 +1023,84 @@
             video.onerror = function () {
                 var codes = {1: 'MEDIA_ERR_ABORTED', 2: 'MEDIA_ERR_NETWORK', 3: 'MEDIA_ERR_DECODE', 4: 'MEDIA_ERR_SRC_NOT_SUPPORTED'};
                 failed(video.error ? codes[video.error.code] : 'HTML5_ERROR');
-            }; video.onended = function () { if (active()) stopPlayback(); };
+            }; video.onended = function () { if (active()) finishPlayback(); };
             video.preload = 'auto'; video.onwaiting = function () { buffering(); };
             video.ontimeupdate = function () { if (active()) updateTime(video.currentTime, video.duration); };
             video.onloadedmetadata = function () {
                 if (!active()) return;
-                if (audioRestart) {
-                    try {
-                        var chosen = findBrowserTrack(video.audioTracks, audioRestart.track);
-                        if (chosen < 0) return failed('AUDIO_TRACK_UNAVAILABLE');
-                        // Rebuild the decoder before choosing audio: older TV browsers can
-                        // update enabled flags during playback without changing the sound.
-                        video.audioTracks[chosen].enabled = true;
-                        for (var a = 0; a < video.audioTracks.length; a++) if (a !== chosen) video.audioTracks[a].enabled = false;
-                        if (!video.audioTracks[chosen].enabled) return failed('AUDIO_TRACK_REJECTED');
-                        var textIndex = audioRestart.textTrack ? findBrowserTrack(video.textTracks, audioRestart.textTrack) : -1;
-                        if (video.textTracks) for (var t = 0; t < video.textTracks.length; t++) video.textTracks[t].mode = t === textIndex ? 'showing' : 'disabled';
-                        if (textIndex >= 0) playback.subtitleChoice = 'track:' + textIndex;
-                        function resumeAudio() {
-                            if (!active()) return;
-                            video.onseeked = null;
-                            if (audioRestart.paused) {
-                                clearTimeout(playback.startTimer); video.pause(); playback.preparing = false; playback.paused = true;
-                                playback.lastProgressAt = Date.now(); updateTime(video.currentTime, video.duration); paintPause(); paintTimeline();
-                                playbackStatus('Paused · Audio source reloaded'); showBar();
-                            } else {
-                                var resumed = video.play(); if (resumed && resumed.catch) resumed.catch(failed);
-                            }
-                        }
-                        if (resumeAt > 0) { video.onseeked = resumeAudio; video.currentTime = Math.min(resumeAt, isFinite(video.duration) ? Math.max(0, video.duration - 0.1) : resumeAt); }
-                        else resumeAudio();
-                    } catch (audioError) { failed('AUDIO_RELOAD_FAILED'); }
-                } else if (resumeAt) { try { video.currentTime = resumeAt; } catch (e) {} }
+                if (resumeAt) { try { video.currentTime = resumeAt; } catch (e) {} }
                 if (active()) updateTime(video.currentTime, video.duration);
             };
             video.onprogress = function () { if (active()) paintTimeline(); };
-            video.onplaying = function () { if (active()) { clearTimeout(playback.startTimer); playback.preparing = false; if (video.paused || playback.seeking) return; playbackStatus(audioRestart ? 'Playing · Audio source reloaded' : 'Playing'); paintTimeline(); paintPause(); showBar(); if (!document.getElementById('player').contains(document.activeElement)) document.getElementById('pause').focus(); } };
+            video.onplaying = function () { if (active()) { clearTimeout(playback.startTimer); playback.preparing = false; applyLanguagePrefs(); if (video.paused || playback.seeking) return; playbackStatus('Playing'); paintTimeline(); paintPause(); showBar(); if (!document.getElementById('player').contains(document.activeElement)) document.getElementById('pause').focus(); } };
             video.src = can.url;
-            if (audioRestart) { playbackStatus('Preparing selected audio…'); playback.startTimer = setTimeout(function () { failed('AUDIO_RELOAD_TIMEOUT'); }, 30000); video.load(); }
-            else { var promise = video.play(); if (promise && promise.catch) promise.catch(failed); }
+            var promise = video.play(); if (promise && promise.catch) promise.catch(failed);
         }
     }
+    function nextEpisodeLabel(meta, video) {
+        return 'S' + (video.season || 0) + 'E' + (video.episode || 0) + ' · ' + (video.title || video.name || meta.name);
+    }
+    function offerNextEpisode() {
+        var owner = playback;
+        if (!owner || owner.nextOffered || read('autoplayNext', 'on') !== 'on') return;
+        owner.nextOffered = true;
+        var next = C.nextVideo(owner.meta, owner.id); if (!next) return;
+        owner.next = {video: next, streams: [], pending: 0};
+        // Look for the next episode's sources while the credits run.
+        var providers = addons.filter(function (a) { return C.supports(a, 'stream', owner.meta.type, next.id); });
+        owner.next.pending = providers.length;
+        providers.forEach(function (addon) {
+            request(C.resourceURL(addon, 'stream', owner.meta.type, next.id), null, function (err, data) {
+                if (playback !== owner) return; owner.next.pending--;
+                if (!err) (data.streams || []).forEach(function (stream) { stream._slAddon = addon.transportUrl; if (C.playable(stream).ok) owner.next.streams.push(stream); });
+            });
+        });
+        var box = document.getElementById('next-episode');
+        box.textContent = ''; box.className = '';
+        box.appendChild(node('span', 'Up next', 'player-eyebrow')); box.appendChild(node('strong', nextEpisodeLabel(owner.meta, next)));
+        var countdown = node('p', '', 'muted'); box.appendChild(countdown);
+        var actions = node('div', null, 'next-actions'); box.appendChild(actions);
+        var now = button('Play now', function () { playNextEpisode(owner); }, actions); now.id = 'next-play';
+        button('Cancel', function () { cancelNextEpisode(owner); }, actions).id = 'next-cancel';
+        var left = 10;
+        function tick() {
+            if (playback !== owner || !owner.next || owner.next.cancelled) return;
+            countdown.textContent = 'Starts in ' + left + ' s'; if (left-- <= 0) return playNextEpisode(owner);
+            owner.next.timer = setTimeout(tick, 1000);
+        }
+        tick(); now.focus();
+    }
+    function cancelNextEpisode(owner) {
+        if (!owner.next) return; owner.next.cancelled = true; clearTimeout(owner.next.timer);
+        document.getElementById('next-episode').className = 'hidden';
+        if (playback === owner) { showBar(); document.getElementById(owner.controlFocus || 'pause').focus(); }
+    }
+    function finishPlayback() {
+        var owner = playback;
+        if (owner && read('autoplayNext', 'on') === 'on' && !owner.nextOffered) offerNextEpisode();
+        if (owner && owner.next && !owner.next.cancelled) return playNextEpisode(owner);
+        stopPlayback();
+    }
+    function playNextEpisode(owner) {
+        if (playback !== owner || !owner.next || owner.next.started) return;
+        var pending = owner.next, video = pending.video, meta = owner.meta, previousStream = owner.stream;
+        clearTimeout(pending.timer); pending.started = true;
+        var title = video.title || video.name || meta.name;
+        function choose() {
+            if (playback !== owner) return;
+            if (pending.pending > 0 && Date.now() - waitStarted < 15000) return setTimeout(choose, 250);
+            document.getElementById('next-episode').className = 'hidden';
+            var best = null, bestScore = -Infinity;
+            pending.streams.forEach(function (stream) { var score = C.bingeScore(stream, previousStream); if (score > bestScore) { best = stream; bestScore = score; } });
+            if (best && C.compatibility(best).rank < 2) return play(best, meta, video.id, title, false);
+            // No safe match: let the viewer pick a source for the next episode.
+            stopPlayback(); streams(meta, video.id, title);
+        }
+        var waitStarted = Date.now();
+        playbackStatus('Preparing ' + nextEpisodeLabel(meta, video) + '…'); choose();
+    }
     function stopPlayback() {
-        if (!playback) return; if (playback.trackChange) playback.trackChange.cancel(); storeProgress(); clearTimeout(playback.startTimer); clearTimeout(playback.seekTimer); clearInterval(playback.watchTimer); var wasNative = playback.native, returnFocus = playback.returnFocus, returnScroll = playback.returnScroll; playback = null; ++playbackEpoch; ++menuSerial;
+        if (!playback) return; if (playback.trackChange) playback.trackChange.cancel(); if (playback.next) clearTimeout(playback.next.timer); document.getElementById('next-episode').className = 'hidden'; storeProgress(true); clearTimeout(playback.startTimer); clearTimeout(playback.seekTimer); clearInterval(playback.watchTimer); var wasNative = playback.native, returnFocus = playback.returnFocus, returnScroll = playback.returnScroll; playback = null; ++playbackEpoch; ++menuSerial;
         if (barTimer) clearTimeout(barTimer); if (subtitleTimer) clearTimeout(subtitleTimer);
         if (wasNative) { try { nativePlayer().stop(); } catch (e) {} try { nativePlayer().close(); } catch (e) {} }
         var video = document.getElementById('video'); video.onended = video.onerror = video.onplaying = video.ontimeupdate = video.onloadedmetadata = video.onwaiting = video.onprogress = video.onseeked = null;
@@ -963,6 +1118,7 @@
         try { if (playback.native) nativePlayer()[paused ? 'pause' : 'play']();
             else if (paused) document.getElementById('video').pause(); else document.getElementById('video').play();
             playback.paused = paused; playback.lastProgressAt = Date.now(); playbackStatus(paused ? 'Paused' : 'Playing'); paintPause(); showBar();
+            if (paused) storeProgress(true);
         } catch (e) { playbackStatus('Player is not ready.'); }
     }
     function seek(delta) {
@@ -1052,62 +1208,6 @@
         tracks.forEach(function (track) { if (track.type === type && isFinite(Number(track.index)) && Number(track.index) >= 0) selected = Number(track.index); });
         return selected;
     }
-    function browserTrackIdentity(track, index) { return {id: String(track.id || ''), language: String(track.language || ''), label: String(track.label || ''), index: index}; }
-    function findBrowserTrack(tracks, identity) {
-        if (!tracks) return -1;
-        var i, candidates = [];
-        if (identity.id) for (i = 0; i < tracks.length; i++) if (String(tracks[i].id) === identity.id && String(tracks[i].language || '') === identity.language) return i;
-        for (i = 0; i < tracks.length; i++) if (String(tracks[i].language || '') === identity.language && String(tracks[i].label || '') === identity.label) candidates.push(i);
-        if (candidates.indexOf(identity.index) >= 0) return identity.index;
-        return candidates.length === 1 ? candidates[0] : -1;
-    }
-    function restartBrowserAudio(index) {
-        if (!playback || playback.native) return;
-        var owner = playback, video = document.getElementById('video'), tracks = video.audioTracks;
-        if (!tracks || !tracks[index]) return;
-        var options = {track: browserTrackIdentity(tracks[index], index), seconds: owner.seconds, paused: owner.paused,
-            subtitleChoice: owner.subtitleChoice, subtitleOffset: owner.subtitleOffset, subtitleSources: owner.subtitleSources.slice(), cues: cues.slice(), textTrack: null};
-        if (video.textTracks) for (var i = 0; i < video.textTracks.length; i++) if (video.textTracks[i].mode === 'showing') options.textTrack = browserTrackIdentity(video.textTracks[i], i);
-        play(owner.stream, owner.meta, owner.id, document.getElementById('playing-title').textContent, false, options);
-    }
-    function switchBrowserAudioLive(index, title, body) {
-        if (!playback || playback.native || playback.seeking) return;
-        var owner = playback, mine = playbackEpoch, serial = menuSerial, video = document.getElementById('video'), tracks = video.audioTracks;
-        if (!tracks || !tracks[index]) return message('This audio track is no longer available. Close and reopen the menu.', true, body);
-        var wasPaused = video.paused, at = video.currentTime, settled = false;
-        function current() { return playback === owner && playbackEpoch === mine && !owner.failed; }
-        function settle() {
-            if (settled || !current()) return; settled = true;
-            video.onseeked = null; clearTimeout(owner.seekTimer); owner.seekTimer = null; owner.seeking = false;
-            if (wasPaused) { video.pause(); owner.paused = true; paintPause(); }
-            owner.lastProgressAt = Date.now(); updateTime(video.currentTime, video.duration); paintTimeline(); showBar();
-            playbackStatus((wasPaused ? 'Paused' : 'Playing') + ' · Audio requested: ' + title);
-            if (menuSerial !== serial) return;
-            // Readback only reflects the browser's flags, not what the TV decoder plays.
-            Array.prototype.forEach.call(body.querySelectorAll('[data-native-track]'), function (b) {
-                var selected = Number(b.getAttribute('data-native-track')) === index;
-                b.setAttribute('aria-checked', String(selected)); b.className = 'track-choice' + (selected ? ' selected' : '');
-                var badge = b.querySelector('.track-selected'); if (badge) b.removeChild(badge); if (selected) b.appendChild(node('span', 'Requested', 'track-selected'));
-            });
-            trackNotice(body, 'Requested ' + title + ' and seeked to your position. The app cannot hear the TV output, so it cannot check whether the sound actually changed. Still hearing the old language? Use Reload source below.');
-            var old = body.querySelector('[data-audio-reload]'); if (old) old.parentNode.removeChild(old);
-            var reload = button('Reload source with ' + title, function () { restartBrowserAudio(index); }, body);
-            reload.setAttribute('data-audio-reload', ''); reload.focus();
-        }
-        try {
-            // Samsung's media pipeline may only apply track changes while playing.
-            if (wasPaused) { var started = video.play(); if (started && started.catch) started.catch(function () {}); }
-            tracks[index].enabled = true;
-            for (var j = 0; j < tracks.length; j++) if (j !== index) tracks[j].enabled = false;
-            owner.seeking = true; playbackStatus('Switching audio… seeking to flush the TV buffer'); showBar();
-            video.onseeked = settle; owner.seekTimer = setTimeout(settle, 5000);
-            video.currentTime = at;
-        } catch (error) {
-            owner.seeking = false; video.onseeked = null; clearTimeout(owner.seekTimer);
-            message('The browser refused this audio track. Try Reload source or another source.', true, body);
-            var fallback = button('Reload source with ' + title, function () { restartBrowserAudio(index); }, body); fallback.setAttribute('data-audio-reload', '');
-        }
-    }
     function switchNativeTrack(type, trackIndex, body, done) {
         if (!playback || playback.trackChange) return;
         var owner = playback, av = nativePlayer(), generation = playbackEpoch, serial = menuSerial;
@@ -1176,13 +1276,92 @@
             else select();
         } catch (startError) { reportFailure(startError); }
     }
+    function rememberLanguage(kind, language) {
+        if (language && language !== 'Unknown language') save(kind === 'audio' ? 'lastAudio' : 'lastSubtitle', language);
+    }
+    function preferredLanguage(kind) {
+        var pref = read(kind === 'audio' ? 'audioLanguage' : 'subtitleLanguage', 'last');
+        return pref === 'last' ? read(kind === 'audio' ? 'lastAudio' : 'lastSubtitle', '') : pref === 'default' ? '' : pref;
+    }
+    function applyLanguagePrefs() {
+        if (!playback || playback.languagesApplied || playback.preparing || playback.failed) return;
+        playback.languagesApplied = true;
+        var owner = playback, audio = preferredLanguage('audio'), subtitle = preferredLanguage('subtitles'), notes = [];
+        function note(text) { notes.push(text); if (playback === owner && !owner.paused && !owner.seeking) playbackStatus('Playing · ' + notes.join(' · ')); }
+        if (owner.native && audio) autoNativeTrack(owner, 'AUDIO', audio, note);
+        if (subtitle === 'off') { owner.subtitleChoice = 'off'; document.getElementById('subtitle').textContent = ''; }
+        else if (subtitle) autoSubtitle(owner, subtitle, note);
+    }
+    function autoNativeTrack(owner, type, language, note, attempt) {
+        var av = nativePlayer(), tracks, index, wanted;
+        if (playback !== owner || owner.failed || owner.trackChange) return;
+        try {
+            tracks = av.getTotalTrackInfo().filter(function (t) { return t.type === type; });
+            index = C.pickLanguage(tracks, language, C.trackLanguage);
+            if (index < 0) { if (type === 'AUDIO' && tracks.length > 1) note(language + ' audio not in this file'); return; }
+            wanted = Number(tracks[index].index);
+            if (nativeTrackIndex(type) === wanted) { if (type === 'TEXT') owner.subtitleChoice = 'track:' + wanted; return; }
+            // Samsung applies audio changes only while playing.
+            if (type === 'AUDIO' && typeof av.getState === 'function' && av.getState() !== 'PLAYING') {
+                if ((attempt || 0) < 10) setTimeout(function () { autoNativeTrack(owner, type, language, note, (attempt || 0) + 1); }, 500);
+                return;
+            }
+            av.setSelectTrack(type, wanted);
+            if (type === 'TEXT') { owner.subtitleChoice = 'track:' + wanted; note(language + ' subtitles'); return; }
+            setTimeout(function () {
+                if (playback !== owner) return;
+                try {
+                    if (nativeTrackIndex('AUDIO') === wanted) return note(language + ' audio');
+                    if (!attempt) return autoNativeTrack(owner, type, language, note, 1);
+                } catch (e) {}
+                note(language + ' audio could not be selected');
+            }, 900);
+        } catch (e) {}
+    }
+    function autoSubtitle(owner, language, note) {
+        if (owner.native) {
+            try {
+                var embedded = nativePlayer().getTotalTrackInfo().filter(function (t) { return t.type === 'TEXT'; });
+                if (C.pickLanguage(embedded, language, C.trackLanguage) >= 0) return autoNativeTrack(owner, 'TEXT', language, note);
+            } catch (e) {}
+        }
+        var candidates = (owner.stream.subtitles || []).map(function (sub) { return {sub: sub, provider: 'This source'}; }), providers;
+        function pickAddonSubtitle() {
+            var index = C.pickLanguage(candidates, language, function (entry) { return C.languageName(entry.sub.lang || entry.sub.language); });
+            if (index < 0) return false;
+            var sub = candidates[index].sub, requestId = owner.subtitleRequest = (owner.subtitleRequest || 0) + 1;
+            request(sub.url, null, function (err, text) {
+                if (playback !== owner || owner.subtitleRequest !== requestId || owner.subtitleChoice !== 'default' || err) return;
+                var parsed = C.subtitleCues(text); if (!parsed.length) return;
+                cues = parsed; owner.subtitleChoice = sub.url; owner.nativeCue = null; note(language + ' subtitles');
+                updateTime(owner.seconds, owner.duration);
+            }, true);
+            return true;
+        }
+        if (pickAddonSubtitle()) return;
+        providers = addons.filter(function (a) { return C.supports(a, 'subtitles', owner.meta.type, owner.id); });
+        var pending = providers.length, hints = owner.stream.behaviorHints || {}, extra = {};
+        ['videoHash', 'videoSize', 'filename'].forEach(function (key) { if (hints[key]) extra[key] = hints[key]; });
+        providers.forEach(function (a) {
+            request(C.resourceURL(a, 'subtitles', owner.meta.type, owner.id, extra), null, function (err, data) {
+                if (playback !== owner) return;
+                if (!err) (data.subtitles || []).slice(0, 40).forEach(function (sub) {
+                    if (!/^https?:\/\//i.test(sub.url || '')) return;
+                    owner.subtitleSources.push({sub: sub, provider: a.manifest.name}); candidates.push({sub: sub, provider: a.manifest.name});
+                });
+                // Wait for every addon so the menu does not refetch, then pick the first match in addon order.
+                if (!--pending && !pickAddonSubtitle()) note('no ' + language + ' subtitles found');
+            });
+        });
+        if (!pending) note('no ' + language + ' subtitles found');
+    }
     function trackMenu(kind) {
         kind = kind === 'audio' ? 'audio' : 'subtitles';
         var body = openPlayerMenu(kind === 'audio' ? 'Audio' : 'Subtitles', kind === 'audio' ? 'audio' : 'tracks'); if (!body) return;
         var mine = playbackEpoch, menu = menuSerial, video = document.getElementById('video'), type = kind === 'audio' ? 'AUDIO' : 'TEXT';
         function current() { return playback && playbackEpoch === mine && menuSerial === menu; }
         if (playback.preparing || playback.seeking) { message('Tracks are available once the video is ready.', false, body); focusFirst(document.getElementById('track-menu')); return; }
-        if (kind === 'audio' && !playback.native) message('HTML5 player: selecting audio switches the track during playback and seeks to your position so the TV flushes its audio buffer. The app cannot hear the TV, so it cannot confirm the sound changed. Language names come from the file.', false, body);
+        if (kind === 'audio' && !playback.native) { message('Audio tracks can only be switched in the installed Stremio Lite app, which uses Samsung AVPlay. This browser player plays the default track.', false, body); focusFirst(document.getElementById('track-menu')); return; }
         var list = node('div', null, 'track-options'); list.setAttribute('role', 'radiogroup'); list.setAttribute('aria-label', kind === 'audio' ? 'Audio tracks' : 'Subtitle tracks'); body.appendChild(list);
         function choice(title, detail, selected, action) {
             var b = button('', action, list); b.className = 'track-choice' + (selected ? ' selected' : ''); b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', String(!!selected));
@@ -1197,18 +1376,17 @@
             else if (video.textTracks) for (var i = 0; i < video.textTracks.length; i++) video.textTracks[i].mode = 'disabled';
         }
         if (kind === 'subtitles') choice('Off', 'No subtitles', playback.subtitleChoice === 'off', function () {
-            playback.subtitleRequest = (playback.subtitleRequest || 0) + 1; disableText(); playback.subtitleChoice = 'off'; closeTrackMenu(); playbackStatus('Subtitles off');
+            playback.subtitleRequest = (playback.subtitleRequest || 0) + 1; disableText(); playback.subtitleChoice = 'off'; rememberLanguage('subtitles', 'off'); closeTrackMenu(); playbackStatus('Subtitles off');
         });
         var tracks = [], selectedIndex = null;
         if (playback.native) {
             try { tracks = nativePlayer().getTotalTrackInfo().filter(function (t) { return t.type === type; }); } catch (e) {}
             try { nativePlayer().getCurrentStreamInfo().forEach(function (t) { if (t.type === type) selectedIndex = Number(t.index); }); } catch (e) {}
         } else {
-            var browserTracks = kind === 'audio' ? video.audioTracks : video.textTracks;
-            if (browserTracks) for (var i = 0; i < browserTracks.length; i++) {
-                var t = browserTracks[i]; if (kind !== 'audio' && t.kind !== 'subtitles' && t.kind !== 'captions') continue;
+            if (video.textTracks) for (var i = 0; i < video.textTracks.length; i++) {
+                var t = video.textTracks[i]; if (t.kind !== 'subtitles' && t.kind !== 'captions') continue;
                 tracks.push({index: i, language: t.language, label: t.label});
-                if (kind === 'audio' ? t.enabled : t.mode === 'showing') selectedIndex = i;
+                if (t.mode === 'showing') selectedIndex = i;
             }
         }
         tracks.forEach(function (track, index) {
@@ -1219,20 +1397,18 @@
                 if (kind === 'subtitles') playback.subtitleRequest = (playback.subtitleRequest || 0) + 1;
                 function applied() {
                     if (!current()) return;
+                    rememberLanguage(kind, C.trackLanguage(track));
                     if (kind === 'subtitles') { disableText(); playback.subtitleChoice = 'track:' + Number(track.index); }
                     closeTrackMenu(); playbackStatus((kind === 'audio' ? 'Audio selected by TV: ' : 'Subtitle track selected by TV: ') + title);
                 }
                 if (playback.native) return switchNativeTrack(type, track.index, body, applied);
-                if (kind === 'audio') return switchBrowserAudioLive(Number(track.index), title, body);
                 try {
-                    var selectedTracks = kind === 'audio' ? video.audioTracks : video.textTracks;
-                    if (!selectedTracks || !selectedTracks[track.index]) throw new Error('Track unavailable');
-                    if (kind === 'audio') for (var j = 0; j < selectedTracks.length; j++) selectedTracks[j].enabled = j === track.index;
-                    else { disableText(); selectedTracks[track.index].mode = 'showing'; }
-                    var accepted = kind === 'audio' ? selectedTracks[track.index].enabled : selectedTracks[track.index].mode === 'showing';
-                    if (!accepted) throw new Error('Track unchanged');
-                    if (kind !== 'audio') playback.subtitleChoice = 'track:' + track.index;
-                    closeTrackMenu(); playbackStatus((kind === 'audio' ? 'Audio: ' : 'Subtitles: ') + title);
+                    var textTracks = video.textTracks;
+                    if (!textTracks || !textTracks[track.index]) throw new Error('Track unavailable');
+                    disableText(); textTracks[track.index].mode = 'showing';
+                    if (textTracks[track.index].mode !== 'showing') throw new Error('Track unchanged');
+                    playback.subtitleChoice = 'track:' + track.index; rememberLanguage('subtitles', C.languageName(track.language));
+                    closeTrackMenu(); playbackStatus('Subtitles: ' + title);
                 } catch (error) { message('The browser did not apply this track. Try another source.', true, body); }
             });
             control.setAttribute('data-native-track', String(track.index));
@@ -1252,7 +1428,7 @@
                     if (err) { note.textContent = err.message; note.className = 'error'; return; }
                     var parsed = C.subtitleCues(text);
                     if (!parsed.length) { note.textContent = 'Use an SRT or WebVTT subtitle file.'; note.className = 'error'; return; }
-                    disableText(); cues = parsed; playback.subtitleChoice = sub.url;
+                    disableText(); cues = parsed; playback.subtitleChoice = sub.url; rememberLanguage('subtitles', C.languageName(sub.lang || sub.language));
                     closeTrackMenu(); playbackStatus('External subtitles enabled.'); updateTime(playback.seconds, playback.duration);
                 }, true);
             });
@@ -1487,12 +1663,19 @@
     document.addEventListener('keydown', function (e) {
         var code = e.keyCode, tag = document.activeElement && document.activeElement.tagName;
         if (code === 10009 || code === 27 || (code === 8 && tag !== 'INPUT')) {
-            e.preventDefault(); if (playback && document.getElementById('track-menu').className !== 'hidden') closeTrackMenu();
+            e.preventDefault(); if (playback && playback.next && document.getElementById('next-episode').className !== 'hidden') cancelNextEpisode(playback);
+            else if (playback && document.getElementById('track-menu').className !== 'hidden') closeTrackMenu();
             else if (playback && playback.scrub !== null) cancelScrub();
             else if (!playback && view.className === 'settings-view' && settingsPanel(document.activeElement)) {
                 var p = settingsPanel(document.activeElement); view.querySelector('[data-settings-target="' + p.getAttribute('data-settings-section') + '"]').focus();
             } else if (!playback && view.className === 'settings-view' && view.querySelector('.settings-sections').contains(document.activeElement)) document.querySelector('#nav [aria-current="page"]').focus();
             else goBack(); return;
+        }
+        if (playback && document.getElementById('next-episode').className !== 'hidden') {
+            var nextBox = document.getElementById('next-episode');
+            if (code === 13 && nextBox.contains(document.activeElement)) { e.preventDefault(); document.activeElement.click(); return; }
+            if (code === 37 || code === 39) { e.preventDefault(); document.getElementById(document.activeElement && document.activeElement.id === 'next-play' ? 'next-cancel' : 'next-play').focus(); return; }
+            if (code === 38 || code === 40) { e.preventDefault(); document.getElementById('next-play').focus(); return; }
         }
         if (playback) {
             var menuOpen = document.getElementById('track-menu').className !== 'hidden';
@@ -1520,16 +1703,22 @@
         }
     });
     document.addEventListener('visibilitychange', function () { if (document.hidden && playback) togglePause(true); });
-    window.addEventListener('beforeunload', function () { if (playback) storeProgress(); cancelLink(); });
+    window.addEventListener('beforeunload', function () { if (playback) storeProgress(true); cancelLink(); });
     try { ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaRewind', 'MediaFastForward'].forEach(function (key) { tizen.tvinputdevice.registerKey(key); }); } catch (e) {}
+    function syncAccountProgress() {
+        if (!authKey) return;
+        var before = JSON.stringify(continueWatching());
+        loadLibrary(function (err) {
+            // Repaint Home only while the viewer is not browsing its rows.
+            if (!err && !playback && view.className === 'discover-view' && JSON.stringify(continueWatching()) !== before && !view.querySelector('.shelf-track button:focus')) home(true);
+        });
+    }
     function start(attempt) {
+        if (PACKAGED) { home(); syncAccountProgress(); return checkForUpdate(false, announceUpdate); }
         xhr('GET', SERVICE + '/health', null, function (err, data) {
-            if (!err && data && data.token) {
-                session = data.token; serviceVersion = data.version || 'unknown';
-                if (window.StremioAuto) xhr('POST', SERVICE + '/auto/ready/' + window.StremioAuto.digest, null, function () {}, false, {'X-Stremio-Auto': window.StremioAuto.token});
-            }
+            if (!err && data && data.token) session = data.token;
             else if (attempt < 3) return setTimeout(function () { start(attempt + 1); }, 600);
-            home();
+            home(); syncAccountProgress();
         });
     }
     start(0);

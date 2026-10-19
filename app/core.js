@@ -117,6 +117,38 @@
         if (mbps >= 20) warnings.push('Higher bitrate: needs steady bandwidth with room for peaks. Try a lower-bitrate source if it buffers.');
         return {tags: tags, warnings: warnings, mbps: mbps};
     }
+    function compatibility(stream) {
+        // Rank 0 plays well on a 2017 Samsung UHD TV, 1 may struggle, 2 is unlikely to play correctly, 3 cannot play here.
+        var can = playable(stream), info, hints = stream.behaviorHints || {}, text;
+        if (!can.ok) return {rank: 3, label: can.reason};
+        info = streamInfo(stream); text = [stream.name, stream.title, stream.description, hints.filename].join(' ');
+        if (/\bav1\b/i.test(text)) return {rank: 2, label: 'AV1 video is not supported by this TV.'};
+        if (info.tags.indexOf('Dolby Vision') >= 0) {
+            if (/hdr10|\bhdr\b/i.test(text)) return {rank: 1, label: 'Dolby Vision with HDR10 fallback: plays as HDR10.'};
+            return {rank: 2, label: 'Dolby Vision only: colours are likely wrong on this TV.'};
+        }
+        if (info.mbps >= 40) return {rank: 1, label: 'Very high bitrate: may buffer.'};
+        return {rank: 0, label: 'Plays on this TV'};
+    }
+    function nextVideo(meta, id, now) {
+        if (!meta || meta.type !== 'series' || !Array.isArray(meta.videos)) return null;
+        var list = sortVideos(meta.videos).filter(function (v) { return v && v.id; }), i;
+        for (i = 0; i < list.length; i++) if (list[i].id === id) break;
+        if (i >= list.length - 1) return null;
+        var next = list[i + 1];
+        // Specials (season 0) are skipped when watching a regular season.
+        if (Number(next.season) === 0 && Number(list[i].season) > 0) return null;
+        if (releaseDetails(next.released, now).upcoming) return null;
+        return next;
+    }
+    function bingeScore(candidate, previous) {
+        var a = candidate.behaviorHints || {}, b = previous.behaviorHints || {}, score = 0;
+        if (a.bingeGroup && a.bingeGroup === b.bingeGroup) score += 1000;
+        if (candidate._slAddon && candidate._slAddon === previous._slAddon) score += 100;
+        if (candidate.name && candidate.name === previous.name) score += 50;
+        if (streamInfo(candidate).tags[0] === streamInfo(previous).tags[0]) score += 20;
+        return score - compatibility(candidate).rank * 10;
+    }
     function subtitleCues(text) {
         var blocks = String(text).replace(/\r/g, '').split(/\n\s*\n/), cues = [];
         function seconds(s) { var parts = s.replace(',', '.').split(':'); return parts.reduce(function (a, p) { return a * 60 + Number(p); }, 0); }
@@ -134,6 +166,18 @@
         var names = {en:'English',eng:'English',nl:'Dutch',nld:'Dutch',dut:'Dutch',de:'German',deu:'German',ger:'German',fr:'French',fra:'French',fre:'French',es:'Spanish',spa:'Spanish',it:'Italian',ita:'Italian',pt:'Portuguese',por:'Portuguese',pl:'Polish',pol:'Polish',tr:'Turkish',tur:'Turkish',ar:'Arabic',ara:'Arabic',ja:'Japanese',jpn:'Japanese',ko:'Korean',kor:'Korean',zh:'Chinese',zho:'Chinese',chi:'Chinese',ru:'Russian',rus:'Russian',uk:'Ukrainian',ukr:'Ukrainian',sv:'Swedish',swe:'Swedish',no:'Norwegian',nor:'Norwegian',da:'Danish',dan:'Danish',fi:'Finnish',fin:'Finnish',hi:'Hindi',hin:'Hindi',und:'Unknown language'};
         return names[code] || (value ? String(value).slice(0, 60) : 'Unknown language');
     }
+    function trackLanguage(track) {
+        var info = track.extra_info || {};
+        if (typeof info === 'string') { try { info = JSON.parse(info); } catch (e) { info = {}; } }
+        if (!info || typeof info !== 'object') info = {};
+        return languageName(info.language || info.track_lang || track.language || track.lang);
+    }
+    function pickLanguage(items, language, languageOf) {
+        // Returns the first item in the wanted language, or -1; unknown languages never match.
+        if (!language || language === 'off' || language === 'Unknown language') return -1;
+        for (var i = 0; i < items.length; i++) if (languageOf(items[i]) === language) return i;
+        return -1;
+    }
     function trackLabel(track) {
         var info = track.extra_info || {}, channels, parts;
         if (typeof info === 'string') { try { info = JSON.parse(info); } catch (e) { info = {}; } }
@@ -144,6 +188,11 @@
         channels = Number(info.channels);
         if (channels === 2) parts.push('Stereo'); else if (channels === 6) parts.push('5.1 surround'); else if (channels === 8) parts.push('7.1 surround'); else if (channels > 0) parts.push(channels + ' channels');
         return parts.join(' · ');
+    }
+    function compareVersions(a, b) {
+        var x = String(a || '').split('.'), y = String(b || '').split('.'), i, d;
+        for (i = 0; i < 3; i++) { d = (Number(x[i]) || 0) - (Number(y[i]) || 0); if (d) return d > 0 ? 1 : -1; }
+        return 0;
     }
     function parseTime(text) {
         var parts = String(text || '').replace(/^\s+|\s+$/g, '').split(':'), total = 0, i, value;
@@ -158,5 +207,5 @@
     }
     return {manifestURL: manifestURL, resourceURL: resourceURL, supports: supports, catalogs: catalogs, isLocalFiles: isLocalFiles,
         catalogExtra: catalogExtra, uniqueMetas: uniqueMetas, typeLabel: typeLabel, releaseDetails: releaseDetails, playable: playable, sortVideos: sortVideos, streamInfo: streamInfo, subtitleCues: subtitleCues,
-        languageName: languageName, trackLabel: trackLabel, parseTime: parseTime};
+        languageName: languageName, trackLabel: trackLabel, parseTime: parseTime, compareVersions: compareVersions, trackLanguage: trackLanguage, pickLanguage: pickLanguage, compatibility: compatibility, nextVideo: nextVideo, bingeScore: bingeScore};
 }));

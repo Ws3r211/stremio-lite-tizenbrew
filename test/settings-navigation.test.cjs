@@ -29,7 +29,7 @@ const {chromium}=require('playwright'),createServer=require('../service.js');
     await page.keyboard.press('Enter');await page.getByText('TEST-CODE',{exact:true}).waitFor();assert.equal(await active(),'Cancel sign-in');await visibleFocus();
     await page.keyboard.press('Enter');assert.equal(await page.getByText('TEST-CODE',{exact:true}).count(),0);assert.equal(await active(),'Sign in with Stremio');
     await page.keyboard.press('ArrowLeft');assert.equal(await active(),'Stremio account');
-    await page.keyboard.press('ArrowDown');assert.equal(await active(),'Automatic updates');
+    await page.keyboard.press('ArrowDown');assert.equal(await active(),'Updates');
     await page.keyboard.press('ArrowDown');assert.equal(await active(),'Home catalogs');
     await page.keyboard.press('ArrowRight');assert.equal(await active(),'Show all');await visibleFocus();
     // Both directional axes reach the action row; Down then visits every switch in order.

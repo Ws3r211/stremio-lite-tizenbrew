@@ -2,6 +2,29 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 3.2.0: installed app with Samsung AVPlay
+
+**Stremio Lite is now an installed TV app (`.wgt`), not a TizenBrew module.** TizenBrew application modules load as web pages without Samsung's `webapis`, so they could only use the browser player, and the 2017 TV's browser player ignores audio track selection. The installed app uses Samsung AVPlay: audio and subtitle tracks switch reliably, which was confirmed on the UE49MU7070.
+
+New in 3.2.0:
+
+- **Watch progress synced with your Stremio account.** Positions are written to your Stremio library every minute and on pause or stop, and read back when the app starts. The newest position wins, so Continue watching matches your other Stremio apps. Progress saved by the old TizenBrew module stays in that module's storage and cannot be carried over.
+- **Continue watching row** on Home, a **Resume** button for movies, and **Resume S·E** for series.
+- **Preferred audio and subtitle language** (Settings → Languages). By default the app remembers the language you last picked in the player. Embedded tracks are tried first; for subtitles, addon subtitles in that language are the fallback.
+- **Autoplay next episode** with a 10-second countdown near the end of an episode (Settings → Playback check). It continues with a source from the same release group (`bingeGroup`) or addon when possible, otherwise it opens the source list.
+- **Sources ranked for this TV.** Sources that play well come first. Dolby Vision-only and AV1 sources are marked *Not recommended* and moved down. Dolby Vision with an HDR10 fallback and very high bitrates get a warning.
+- **Update check** against the latest GitHub release (Settings → Updates). The TV cannot install updates itself; see below.
+- Removed the TizenBrew-only workarounds: the HTML5 audio reload, the TizenBrew automatic updater UI, and the dependency on the local service. The local service now only backs the desktop tests.
+
+### Installing and updating
+
+Each release has a signed `StremioLite-<version>.wgt` asset. With the TV in Developer Mode and your computer's IP set as the host:
+
+- **TizenBrew Installer:** connect to the TV, choose *Install from GitHub* and enter `Ws3r211/stremio-lite-tizenbrew`. On Tizen 3 it installs the release's `.wgt` without re-signing.
+- **Tizen CLI:** `sdb connect <TV-IP>`, then `tizen install -n StremioLite-<version>.wgt -t <device>`.
+
+Updates must be signed with the same author certificate as the installed app, or the TV refuses to install them over it. The app keeps its account, addons, settings and progress across updates. Build with `python build-wgt.py`, then sign with `tizen package -t wgt -s <profile> -- build/wgt`.
+
 ## Version 3.1.8: live HTML5 audio switch test
 
 TizenBrew application modules run as HTTP pages without Samsung's `webapis`, so this TV always uses the HTML5 player, never AVPlay. On the 2017 TV, the 3.1.6 reload approach changed the selected track in the browser but kept the original language audible.

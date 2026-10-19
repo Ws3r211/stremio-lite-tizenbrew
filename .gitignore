@@ -5,3 +5,4 @@ dist/
 tools/
 design-qa.md
 .auto-cache/
+build/

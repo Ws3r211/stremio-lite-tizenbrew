@@ -27,8 +27,8 @@ const {chromium}=require('playwright'),createServer=require('../service.js');
     // From Home to Settings and the playback check, using the same remote as the TV.
     await key('ArrowUp');await focusIs('View details');await key('ArrowUp');await focusIs('Discover');
     for(let i=0;i<3;i++)await key('ArrowRight');await focusIs('Settings');await key('Enter');await focusIs('Sign in with Stremio');
-    await key('ArrowLeft');for(let i=0;i<3;i++)await key('ArrowDown');await focusIs('Playback check');await key('ArrowRight');await focusIs('TV default');
-    await key('ArrowDown');assert.match(await active(),/^Balanced/);await key('ArrowDown');assert.match(await active(),/^Extra buffering/);await key('ArrowDown');await focusIs('Play test video');await key('Enter');await page.waitForFunction(()=>avCalls.includes('play'));
+    await key('ArrowLeft');for(let i=0;i<5;i++)await key('ArrowDown');await focusIs('Playback check');await key('ArrowRight');await focusIs('TV default');
+    await key('ArrowDown');assert.match(await active(),/^Balanced/);await key('ArrowDown');assert.match(await active(),/^Extra buffering/);await key('ArrowDown');await focusIs('On · 10 second countdown');await key('ArrowDown');await focusIs('Off');await key('ArrowDown');await focusIs('Play test video');await key('Enter');await page.waitForFunction(()=>avCalls.includes('play'));
     await page.evaluate(()=>avListener.oncurrentplaytime(20000));await key('MediaPlayPause');await focusIs('pause');
     const order=['rewind','forward','jump','audio','tracks','stop'];for(const id of order){await key('ArrowRight');await focusIs(id);await inView('#'+id);}
     await key('ArrowRight');await focusIs('stop');for(const id of ['tracks','audio','jump','forward','rewind','pause']){await key('ArrowLeft');await focusIs(id);}
