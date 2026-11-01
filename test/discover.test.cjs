@@ -39,7 +39,7 @@ const createServer=require('../service.js');
         assert.match(await page.evaluate(()=>document.activeElement.textContent),/shelf1 title 8/);
         await page.keyboard.press('ArrowUp');
         await page.keyboard.press('Enter');
-        await page.getByRole('button',{name:'Find streams'}).waitFor();
+        await page.getByRole('button',{name:'Play',exact:true}).waitFor();
         await page.getByRole('button',{name:'Back',exact:true}).click();
         await page.waitForFunction(()=>document.activeElement.textContent.includes('shelf0 title 8'));
         const before=catalogCalls.length;

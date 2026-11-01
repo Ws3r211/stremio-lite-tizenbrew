@@ -2,6 +2,14 @@
 
 An experimental, unofficial Stremio-compatible client for older Samsung TVs, targeting the UE49MU7070 with Tizen 3.0. It runs as a TizenBrew **application module** with a small local service. It is a new lightweight client, not a port of the official Stremio app. Physical-TV testing is still required.
 
+## Version 3.3.0: new title page, source limits and trailers
+
+- **Redesigned movie and series page.** A full-screen backdrop, the title logo, rating, runtime and genre chips, the description, cast and crew. Series get season tabs and episode cards with thumbnails and watch progress.
+- **Start from beginning** next to Resume, for movies and for the episode you were watching.
+- **Trailer** button. It opens the TV's YouTube app with the trailer requested (never the browser). Trailers cannot play inside the app: Stremio only provides YouTube IDs, and YouTube's embedded player does not run on the 2017 TV browser.
+- **Source limits** (Settings → Source limits): hide sources above a maximum file size (2–40 GB) or quality (1080p or 720p) for a slow connection. Sources without size or quality information stay visible, and the source list can still show the hidden ones. Autoplay of the next episode respects the limits.
+- **Timeline fix:** picking a time with Left / Right now jumps there about 1.5 seconds after the last press. Before, the preview was discarded unless you pressed OK. OK still jumps at once, and Return cancels.
+
 ## Version 3.2.0: installed app with Samsung AVPlay
 
 **Stremio Lite is now an installed TV app (`.wgt`), not a TizenBrew module.** TizenBrew application modules load as web pages without Samsung's `webapis`, so they could only use the browser player, and the 2017 TV's browser player ignores audio track selection. The installed app uses Samsung AVPlay: audio and subtitle tracks switch reliably, which was confirmed on the UE49MU7070.

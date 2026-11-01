@@ -12,13 +12,13 @@ const {chromium}=require('playwright'),createServer=require('../service.js');
   if(!sessionStorage.getItem('seeded')){
    sessionStorage.setItem('seeded','1');
    localStorage.setItem('sl.addons',JSON.stringify([addon]));
-   localStorage.setItem('sl.audioLanguage',JSON.stringify('English'));localStorage.setItem('sl.subtitleLanguage',JSON.stringify('English'));
+   localStorage.setItem('sl.audioLanguage',JSON.stringify('English'));localStorage.setItem('sl.maxStreamGB',JSON.stringify(10));localStorage.setItem('sl.subtitleLanguage',JSON.stringify('English'));
    localStorage.setItem('sl.progress',JSON.stringify({ttMOVIE:{seconds:600,duration:6000,date:Date.now(),metaId:'ttMOVIE',type:'movie',name:'Seeded Movie',poster:''}}));
   }
   window.engineState='NONE';window.audioIndex=3;window.textIndex=-1;window.trackCalls=[];window.opened=[];
   const tracks=[{type:'VIDEO',index:0},{type:'AUDIO',index:3,extra_info:'{"language":"fra"}'},{type:'AUDIO',index:5,extra_info:'{"language":"eng"}'},{type:'TEXT',index:7,extra_info:'{"track_lang":"fra"}'},{type:'TEXT',index:9,extra_info:'{"track_lang":"eng"}'}];
   window.webapis={avplay:{open(u){opened.push(u);engineState='IDLE';},setDisplayRect(){},setListener(l){window.listener=l;},getState(){return engineState;},prepareAsync(ok){engineState='READY';setTimeout(ok,10);},
-   play(){engineState='PLAYING';},pause(){engineState='PAUSED';},stop(){engineState='IDLE';},close(){engineState='NONE';},getDuration(){return 120000;},seekTo(ms,ok){setTimeout(ok,10);},
+   play(){engineState='PLAYING';},pause(){engineState='PAUSED';},stop(){engineState='IDLE';},close(){engineState='NONE';},getDuration(){return 120000;},seekTo(ms,ok){(window.seeks=window.seeks||[]).push(ms);setTimeout(ok,10);},
    getTotalTrackInfo(){return tracks;},getCurrentStreamInfo(){return [{type:'AUDIO',index:audioIndex},{type:'TEXT',index:textIndex}];},setSilentSubtitle(){},
    setSelectTrack(type,index){trackCalls.push({type,index,state:engineState});if(type==='AUDIO'&&engineState==='PLAYING')setTimeout(()=>{audioIndex=index;},30);if(type==='TEXT')setTimeout(()=>{textIndex=index;},30);}}};
  },[addon]);
@@ -29,6 +29,7 @@ const {chromium}=require('playwright'),createServer=require('../service.js');
   else if(u.includes('/stream/series/ttSHOW%3A1%3A1'))data={streams:[
    {name:'Fixture DV',title:'2160p DV HEVC',url:'https://cdn.example/ep1-dv.mkv',behaviorHints:{bingeGroup:'fx-dv'}},
    {name:'Fixture AV1',title:'1080p AV1',url:'https://cdn.example/ep1-av1.mkv'},
+   {name:'Fixture Huge',title:'1080p x264 15.2 GB',url:'https://cdn.example/ep1-huge.mkv'},
    {name:'Fixture Good',title:'1080p x264',url:'https://cdn.example/ep1.mkv',behaviorHints:{bingeGroup:'fx-1080'}}]};
   else if(u.includes('/stream/series/ttSHOW%3A1%3A2'))data={streams:[
    {name:'Fixture Good',title:'720p x264',url:'https://cdn.example/ep2-other.mkv',behaviorHints:{bingeGroup:'fx-720'}},
@@ -46,6 +47,7 @@ const {chromium}=require('playwright'),createServer=require('../service.js');
   await page.getByRole('button',{name:/^1\. First/}).click();
   await page.waitForFunction(()=>/sources/.test(document.getElementById('status').textContent));
   const sources=await page.locator('#view .list > button').allTextContents();
+  assert.equal(sources.length,3,'the 15 GB source is hidden by the 10 GB limit');assert.match(await page.locator('.hidden-sources').textContent(),/1 source is hidden.*over 10 GB/);
   assert.match(sources[0],/Fixture Good.*Plays on this TV/s);assert.match(sources[1],/Not recommended/);assert.match(sources[2],/Not recommended/);
   await page.getByRole('button',{name:/Fixture Good/}).click();
   await page.waitForFunction(()=>engineState==='PLAYING');
@@ -53,6 +55,14 @@ const {chromium}=require('playwright'),createServer=require('../service.js');
   await page.waitForFunction(()=>audioIndex===5&&textIndex===9,null,{timeout:5000});
   assert(await page.evaluate(()=>trackCalls.filter(c=>c.type==='AUDIO').every(c=>c.state==='PLAYING')));
   await page.waitForFunction(()=>/English audio/.test(document.getElementById('playback-status').textContent));
+  // Picking a time with Left / Right applies it after a short pause, without pressing OK.
+  await page.evaluate(()=>listener.oncurrentplaytime(20000));
+  await page.evaluate(()=>document.getElementById('timeline').focus());
+  await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowRight');
+  assert.equal(await page.evaluate(()=>(window.seeks||[]).length),0,'still previewing');
+  await page.waitForFunction(()=>(window.seeks||[]).length===1,null,{timeout:4000});
+  assert.equal(await page.evaluate(()=>seeks[0]),40000);
+  await page.waitForFunction(()=>document.getElementById('seek-preview').className==='hidden');
   // Near the end the next episode is offered and continues with the same release group.
   await page.evaluate(()=>listener.oncurrentplaytime(30000));
   await page.evaluate(()=>listener.oncurrentplaytime(100000));
@@ -68,6 +78,6 @@ const {chromium}=require('playwright'),createServer=require('../service.js');
   await page.waitForFunction(()=>document.getElementById('next-episode').className==='hidden'||!document.getElementById('next-episode').textContent);
   await page.keyboard.press('Escape');assert(await page.locator('#player').isHidden());
   assert.deepEqual(errors,[]);
-  console.log('PASS: Continue watching row, TV-compatible source ranking, preferred audio/subtitle languages, next-episode prompt with binge-group match');
+  console.log('PASS: scrub auto-seek, source size limit, Continue watching row, TV-compatible source ranking, preferred audio/subtitle languages, next-episode prompt with binge-group match');
  }finally{await context.close();await browser.close();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -99,10 +99,11 @@
     }
     function streamInfo(stream) {
         var hints = stream.behaviorHints || {}, text = [stream.name, stream.title, stream.description, hints.filename].join(' ');
-        var tags = [], warnings = [], match, mbps = 0;
-        if (/(?:2160p|\b4k\b|\buhd\b)/i.test(text)) tags.push('4K');
-        else if (/1080p/i.test(text)) tags.push('1080p');
-        else if (/720p/i.test(text)) tags.push('720p');
+        var tags = [], warnings = [], match, mbps = 0, sizeGB = 0, height = 0;
+        if (/(?:2160p|\b4k\b|\buhd\b)/i.test(text)) { tags.push('4K'); height = 2160; }
+        else if (/1080p/i.test(text)) { tags.push('1080p'); height = 1080; }
+        else if (/720p/i.test(text)) { tags.push('720p'); height = 720; }
+        else if (/(?:480p|576p|\bsd\b)/i.test(text)) height = 480;
         if (/(?:hevc|h[ .-]?265|x265)/i.test(text)) tags.push('HEVC');
         else if (/(?:avc|h[ .-]?264|x264)/i.test(text)) tags.push('H.264');
         if (/(?:\bdv\b|\bdovi\b|dolby[ .-]?vision)/i.test(text)) {
@@ -112,10 +113,21 @@
         else if (/hdr10|\bhdr\b/i.test(text)) tags.push('HDR');
         match = text.match(/(\d+(?:[.,]\d+)?)\s*(?:mbps|mbit\/s|mb\/s)\b/i);
         if (match) { mbps = Number(match[1].replace(',', '.')); tags.push(mbps + ' Mbps'); }
-        if (hints.videoSize > 0) tags.push((hints.videoSize / 1000000000).toFixed(1) + ' GB');
-        else { match = text.match(/\b(\d+(?:[.,]\d+)?)\s*(gb|gib)\b/i); if (match) tags.push(match[1] + ' ' + match[2].toUpperCase()); }
+        if (hints.videoSize > 0) { sizeGB = hints.videoSize / 1000000000; tags.push(sizeGB.toFixed(1) + ' GB'); }
+        else {
+            match = text.match(/\b(\d+(?:[.,]\d+)?)\s*(gb|gib)\b/i);
+            if (match) { sizeGB = Number(match[1].replace(',', '.')); tags.push(match[1] + ' ' + match[2].toUpperCase()); }
+            else { match = text.match(/\b(\d+(?:[.,]\d+)?)\s*(mb|mib)\b/i); if (match) { sizeGB = Number(match[1].replace(',', '.')) / 1000; tags.push(match[1] + ' ' + match[2].toUpperCase()); } }
+        }
         if (mbps >= 20) warnings.push('Higher bitrate: needs steady bandwidth with room for peaks. Try a lower-bitrate source if it buffers.');
-        return {tags: tags, warnings: warnings, mbps: mbps};
+        return {tags: tags, warnings: warnings, mbps: mbps, sizeGB: sizeGB, height: height};
+    }
+    function exceedsLimits(stream, maxGB, maxHeight) {
+        // Unknown sizes and resolutions are kept: hiding them could hide every source.
+        var info = streamInfo(stream);
+        if (maxGB > 0 && info.sizeGB > maxGB) return 'Larger than ' + maxGB + ' GB';
+        if (maxHeight > 0 && info.height > maxHeight) return 'Above ' + maxHeight + 'p';
+        return '';
     }
     function compatibility(stream) {
         // Rank 0 plays well on a 2017 Samsung UHD TV, 1 may struggle, 2 is unlikely to play correctly, 3 cannot play here.
@@ -207,5 +219,5 @@
     }
     return {manifestURL: manifestURL, resourceURL: resourceURL, supports: supports, catalogs: catalogs, isLocalFiles: isLocalFiles,
         catalogExtra: catalogExtra, uniqueMetas: uniqueMetas, typeLabel: typeLabel, releaseDetails: releaseDetails, playable: playable, sortVideos: sortVideos, streamInfo: streamInfo, subtitleCues: subtitleCues,
-        languageName: languageName, trackLabel: trackLabel, parseTime: parseTime, compareVersions: compareVersions, trackLanguage: trackLanguage, pickLanguage: pickLanguage, compatibility: compatibility, nextVideo: nextVideo, bingeScore: bingeScore};
+        languageName: languageName, trackLabel: trackLabel, parseTime: parseTime, compareVersions: compareVersions, trackLanguage: trackLanguage, pickLanguage: pickLanguage, compatibility: compatibility, nextVideo: nextVideo, bingeScore: bingeScore, exceedsLimits: exceedsLimits};
 }));

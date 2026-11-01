@@ -4,7 +4,7 @@
     var C = window.StremioLite, view = document.getElementById('view');
     var SERVICE = 'http://127.0.0.1:17780', API = 'https://api.strem.io/api/';
     var LINK = 'https://link.stremio.com/api/v2/';
-    var APP_VERSION = '3.2.0', REPOSITORY = 'Ws3r211/stremio-lite-tizenbrew';
+    var APP_VERSION = '3.3.0', REPOSITORY = 'Ws3r211/stremio-lite-tizenbrew';
     var RELEASES = 'https://api.github.com/repos/' + REPOSITORY + '/releases/latest';
     // The installed widget talks to addons directly; the local service only backs desktop tests.
     var PACKAGED = location.protocol === 'file:';
@@ -16,7 +16,7 @@
     var playback = null, playbackEpoch = 0, cues = [], barTimer = null, subtitleTimer = null;
     var catalogCache = {}, heroCache = {}, discoverState = {type: 'all', row: 0, card: 0}, discoverTick = null;
     var homeScroll = null, heroTimer = null;
-    var menuSerial = 0, menuReturn = 'tracks', scrubCount = 0, scrubLast = 0;
+    var menuSerial = 0, menuReturn = 'tracks', scrubCount = 0, scrubLast = 0, scrubTimer = null;
     var searchState = {query: '', type: 'all'};
     function read(key, fallback) { try { return JSON.parse(localStorage.getItem('sl.' + key)) || fallback; } catch (e) { return fallback; } }
     function save(key, value) { try { localStorage.setItem('sl.' + key, JSON.stringify(value)); return true; } catch (e) { status('TV storage is full; settings could not be saved.'); return false; } }
@@ -434,98 +434,225 @@
         input.focus();
         if (searchState.query) form.onsubmit({preventDefault: function () {}});
     }
+    function icon(name) {
+        var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'), use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+        svg.setAttribute('aria-hidden', 'true'); use.setAttributeNS('http://www.w3.org/1999/xlink', 'href', 'player-icons.svg#' + name); svg.appendChild(use); return svg;
+    }
+    function actionButton(label, action, parent, kind, iconName) {
+        var b = button('', action, parent); b.className = 'title-action' + (kind ? ' ' + kind : '');
+        if (iconName) b.appendChild(icon(iconName));
+        b.appendChild(node('span', label)); return b;
+    }
+    function trailerId(item) {
+        var list = [], id;
+        (item.trailerStreams || []).forEach(function (t) { if (t && t.ytId) list.push(t.ytId); });
+        (item.trailers || []).forEach(function (t) { if (t && t.source && (!t.type || t.type === 'Trailer')) list.push(t.source); });
+        id = list.filter(function (x) { return /^[A-Za-z0-9_-]{11}$/.test(String(x)); })[0];
+        return id || '';
+    }
+    // 2017-2018 Samsung TVs use the first ID, later models the second.
+    var YOUTUBE_APPS = ['9Ur5IzDKqV.TizenYouTube', '111299001912'];
+    function playTrailer(id, name) {
+        // Samsung's YouTube app plays the trailer; AVPlay cannot open YouTube pages.
+        if (!window.tizen || !tizen.application || !window.tizen.ApplicationControl) return status('Trailers open in the YouTube app on the TV.', true);
+        var attempts = [];
+        YOUTUBE_APPS.forEach(function (app) {
+            attempts.push(function (ok, fail) { tizen.application.launchAppControl(new tizen.ApplicationControl('http://tizen.org/appcontrol/operation/default', null, null, null, [new tizen.ApplicationControlData('PAYLOAD', ['v=' + id])]), app, ok, fail); });
+        });
+        status('Opening the ' + name + ' trailer in YouTube…');
+        (function next(i) {
+            if (i >= attempts.length) return status('Could not open YouTube on this TV. Install or update the YouTube app.', true);
+            try { attempts[i](function () { status('Trailer opened in YouTube. Press Return there to come back.'); }, function () { next(i + 1); }); } catch (e) { next(i + 1); }
+        }(0));
+    }
+    function loadThumbs(list, row) {
+        // Old TVs stall when a long season requests every thumbnail at once.
+        var rows = Array.prototype.slice.call(list.children), at = Math.max(0, rows.indexOf(row));
+        rows.slice(Math.max(0, at - 2), at + 6).forEach(function (r) {
+            var img = r.querySelector('img[data-src]'); if (img) { img.src = img.getAttribute('data-src'); img.removeAttribute('data-src'); }
+        });
+    }
+    function listOf(value) {
+        // Addons send names as a list, a single string or objects with a name.
+        return (Array.isArray(value) ? value : value ? [value] : []).map(function (x) { return x && typeof x === 'object' ? x.name : x; }).filter(function (x) { return typeof x === 'string' && x; });
+    }
+    function remaining(p) { return p.duration > 0 ? Math.max(1, Math.round((p.duration - p.seconds) / 60)) + ' min left' : formatTime(p.seconds) + ' watched'; }
+    function progressBar(p, parent, className) {
+        var bar = node('span', null, className || 'progress-bar'), fill = node('span');
+        fill.style.width = (p.duration > 0 ? Math.max(2, Math.min(100, p.seconds / p.duration * 100)) : 0) + '%'; bar.appendChild(fill); parent.appendChild(bar); return bar;
+    }
     function details(meta) {
+        var season = null;
         function render() {
-            var mine = begin(meta.name, render, false), box = node('div', null, 'detail');
-            if (/^https?:\/\//i.test(meta.poster || '')) { var img = document.createElement('img'); img.src = meta.poster; img.alt = ''; box.appendChild(img); }
-            var text = node('div'); box.appendChild(text); view.appendChild(box);
-            message(meta.description || 'Loading details…', false, text);
-            var actions = node('div', null, 'panel'); view.appendChild(actions);
-            button('Back', goBack, actions);
-            function content(item) {
-                if (epoch !== mine) return; text.textContent = ''; message(item.description || 'No description provided.', false, text);
-                message([C.typeLabel(item.type), item.releaseInfo || item.year, item.runtime, item.imdbRating ? 'IMDb ' + item.imdbRating : '', (item.genres || []).join(', ')].filter(Boolean).join(' · '), false, text);
-                if (item.released) message(C.releaseDetails(item.released).label, false, text);
-                while (actions.children.length > 1) actions.removeChild(actions.lastChild);
-                if (item.type === 'series' || item.type === 'tv') {
-                    var videos = C.sortVideos(item.videos), seasons = [];
-                    videos.forEach(function (v) { if (seasons.indexOf(v.season || 0) < 0) seasons.push(v.season || 0); });
-                    if (!videos.length) message('This addon returned no episodes.', false, actions);
-                    var season = document.createElement('select'); season.setAttribute('aria-label', 'Season');
-                    seasons.forEach(function (s) { var o = node('option', 'Season ' + s); o.value = s; season.appendChild(o); });
-                    actions.appendChild(season); var list = node('div', null, 'list'); actions.appendChild(list);
-                    function episodes() {
-                        list.textContent = '';
-                        videos.filter(function (v) { return Number(v.season || 0) === Number(season.value); }).forEach(function (v) {
-                            var release = C.releaseDetails(v.released);
-                            var episode = button('', function () { streams(item, v.id, v.title || v.name || item.name); }, list); episode.className = 'episode-row';
-                            episode.appendChild(node('span', (v.episode !== undefined ? v.episode + '. ' : '') + (v.title || v.name || 'Episode'), 'episode-title'));
-                            episode.appendChild(node('span', release.label, release.upcoming ? 'episode-release upcoming' : 'episode-release'));
-                            if (v.overview) episode.appendChild(node('span', v.overview, 'episode-overview'));
-                            if (release.upcoming) episode.appendChild(node('span', 'Scheduled date from addon; streams may not be available yet.', 'episode-note'));
-                        });
-                    }
-                    var resume = resumeFor(item.id), resumeVideo = resume && videos.filter(function (v) { return v.id === resume.videoId; })[0];
-                    if (resumeVideo) {
-                        var resumeButton = button('Resume S' + (resumeVideo.season || 0) + 'E' + (resumeVideo.episode || 0) + ' · ' + formatTime(resume.p.seconds), function () {
-                            streams(item, resumeVideo.id, resumeVideo.title || resumeVideo.name || item.name);
-                        }, null);
-                        resumeButton.className = 'primary'; actions.insertBefore(resumeButton, season);
-                        season.value = String(resumeVideo.season || 0);
-                    }
-                    season.onchange = episodes; episodes();
-                } else {
-                    var moviePosition = progress[item.id] && progress[item.id].seconds > 10 ? progress[item.id] : null;
-                    button(moviePosition ? 'Resume from ' + formatTime(moviePosition.seconds) : 'Find streams', function () { streams(item, item.id, item.name); }, actions);
+            var mine = begin(meta.name, render, false);
+            view.textContent = ''; view.className = 'title-view'; document.body.className = 'title-page';
+            var backdrop = document.createElement('img'); backdrop.className = 'title-backdrop'; backdrop.alt = ''; view.appendChild(backdrop);
+            backdrop.onerror = function () { backdrop.removeAttribute('src'); };
+            view.appendChild(node('div', null, 'title-shade'));
+            var hero = node('section', null, 'title-hero'); hero.setAttribute('aria-label', meta.name); view.appendChild(hero);
+            var kicker = node('p', C.typeLabel(meta.type), 'eyebrow'); hero.appendChild(kicker);
+            var heading = node('h1', meta.name, 'title-name'); hero.appendChild(heading);
+            var facts = node('div', null, 'title-facts'); hero.appendChild(facts);
+            var description = node('p', meta.description || 'Loading details…', 'title-description'); hero.appendChild(description);
+            var actions = node('div', null, 'title-actions'); hero.appendChild(actions);
+            var resumeLine = node('div', null, 'title-resume'); hero.appendChild(resumeLine);
+            var credits = node('div', null, 'title-credits'); hero.appendChild(credits);
+            var episodesBox = node('section', null, 'title-episodes'); view.appendChild(episodesBox);
+            actionButton('Back', goBack, actions, 'secondary');
+            function paint(item, final) {
+                if (epoch !== mine) return;
+                var art = item.background || item.poster || '';
+                if (/^https?:\/\//i.test(art) && backdrop.getAttribute('src') !== art) backdrop.src = art;
+                if (/^https?:\/\//i.test(item.logo || '') && !hero.querySelector('.title-logo')) {
+                    var logo = document.createElement('img'); logo.className = 'title-logo'; logo.alt = item.name;
+                    logo.onload = function () { heading.className = 'title-name visually-hidden'; };
+                    logo.onerror = function () { if (logo.parentNode) logo.parentNode.removeChild(logo); heading.className = 'title-name'; };
+                    hero.insertBefore(logo, heading); logo.src = item.logo;
                 }
-                focusFirst(actions); status('Select an episode or find streams.');
+                kicker.textContent = [C.typeLabel(item.type), item.releaseInfo || item.year].filter(Boolean).join(' · ');
+                facts.textContent = '';
+                if (item.imdbRating) facts.appendChild(node('span', '★ ' + item.imdbRating + ' IMDb', 'fact rating'));
+                if (item.runtime) facts.appendChild(node('span', item.runtime, 'fact'));
+                listOf(item.genres || item.genre).slice(0, 3).forEach(function (g) { facts.appendChild(node('span', g, 'fact')); });
+                if (item.released && item.type === 'movie') facts.appendChild(node('span', C.releaseDetails(item.released).label, 'fact'));
+                description.textContent = item.description || (final ? 'No description provided.' : 'Loading details…');
+                credits.textContent = '';
+                [['Starring', item.cast], ['Director', item.director], ['Writer', item.writer]].forEach(function (entry) {
+                    var names = listOf(entry[1]).slice(0, entry[0] === 'Starring' ? 4 : 2);
+                    if (!names.length) return;
+                    var line = node('p'); line.appendChild(node('span', entry[0] + ' ', 'credit-label')); line.appendChild(document.createTextNode(names.join(', '))); credits.appendChild(line);
+                });
+                if (!final) return;
+                // Rebuild the actions now that episodes, progress and trailers are known.
+                actions.textContent = ''; resumeLine.textContent = ''; episodesBox.textContent = '';
+                var isSeries = item.type === 'series' || item.type === 'tv', trailer = trailerId(item), first = null;
+                if (isSeries) {
+                    var videos = C.sortVideos(item.videos), seasons = [];
+                    videos.forEach(function (v) { if (seasons.indexOf(Number(v.season || 0)) < 0) seasons.push(Number(v.season || 0)); });
+                    // Specials go last so Play starts at season 1.
+                    seasons.sort(function (a, b) { return (a === 0) - (b === 0) || a - b; });
+                    var resume = resumeFor(item.id), resumeVideo = resume && videos.filter(function (v) { return v.id === resume.videoId; })[0];
+                    first = videos.filter(function (v) { return Number(v.season || 0) === seasons[0] && !C.releaseDetails(v.released).upcoming; })[0];
+                    if (resumeVideo) {
+                        var code = 'S' + (resumeVideo.season || 0) + 'E' + (resumeVideo.episode || 0), episodeTitle = resumeVideo.title || resumeVideo.name || item.name;
+                        actionButton('Resume ' + code, function () { streams(item, resumeVideo.id, episodeTitle); }, actions, 'primary', 'player-play');
+                        actionButton('Start ' + code + ' from beginning', function () { streams(item, resumeVideo.id, episodeTitle, {startOver: true}); }, actions, '', 'rewind-backward-10');
+                        resumeLine.appendChild(node('span', code + ' · ' + episodeTitle + ' · ' + remaining(resume.p), 'resume-label')); progressBar(resume.p, resumeLine);
+                        if (season === null) season = Number(resumeVideo.season || 0);
+                    } else if (first) actionButton('Play S' + (first.season || 0) + 'E' + (first.episode || 0), function () { streams(item, first.id, first.title || first.name || item.name); }, actions, 'primary', 'player-play');
+                    if (season === null || seasons.indexOf(season) < 0) season = seasons[0];
+                    if (trailer) actionButton('Trailer', function () { playTrailer(trailer, item.name); }, actions);
+                    actionButton('Back', goBack, actions, 'secondary');
+                    if (!videos.length) { message('This addon returned no episodes.', false, episodesBox); }
+                    else {
+                        var tabs = node('div', null, 'season-tabs'); tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Seasons'); episodesBox.appendChild(tabs);
+                        var list = node('div', null, 'episode-list'); episodesBox.appendChild(list);
+                        var paintEpisodes = function () {
+                            list.textContent = '';
+                            Array.prototype.forEach.call(tabs.children, function (b) { var on = Number(b.getAttribute('data-season')) === season; b.className = 'season-tab' + (on ? ' selected' : ''); b.setAttribute('aria-selected', String(on)); });
+                            videos.filter(function (v) { return Number(v.season || 0) === season; }).forEach(function (v) {
+                                var release = C.releaseDetails(v.released), watched = progress[v.id];
+                                var row = button('', function () { streams(item, v.id, v.title || v.name || item.name); }, list); row.className = 'episode-row';
+                                var thumb = node('span', null, 'episode-thumb'); row.appendChild(thumb);
+                                if (/^https?:\/\//i.test(v.thumbnail || '')) { var img = document.createElement('img'); img.alt = ''; img.onerror = function () { this.style.display = 'none'; }; img.setAttribute('data-src', v.thumbnail); thumb.appendChild(img); }
+                                row.onfocus = function () { loadThumbs(list, row); };
+                                if (watched && watched.seconds > 10) progressBar(watched, thumb, 'thumb-progress');
+                                var text = node('span', null, 'episode-text'); row.appendChild(text);
+                                text.appendChild(node('span', (v.episode !== undefined ? v.episode + '. ' : '') + (v.title || v.name || 'Episode'), 'episode-title'));
+                                text.appendChild(node('span', release.label + (watched && watched.seconds > 10 ? ' · ' + remaining(watched) : ''), release.upcoming ? 'episode-release upcoming' : 'episode-release'));
+                                if (v.overview) text.appendChild(node('span', v.overview, 'episode-overview'));
+                                if (release.upcoming) text.appendChild(node('span', 'Scheduled date from addon; streams may not be available yet.', 'episode-note'));
+                            });
+                            loadThumbs(list, list.firstChild);
+                        };
+                        seasons.forEach(function (n) {
+                            var b = button(n === 0 ? 'Specials' : 'Season ' + n, function () { season = n; paintEpisodes(); b.focus(); }, tabs);
+                            b.setAttribute('role', 'tab'); b.setAttribute('data-season', String(n));
+                        });
+                        paintEpisodes();
+                    }
+                } else {
+                    var watchedMovie = progress[item.id] && progress[item.id].seconds > 10 && (!progress[item.id].duration || progress[item.id].seconds < progress[item.id].duration - 20) ? progress[item.id] : null;
+                    actionButton(watchedMovie ? 'Resume' : 'Play', function () { streams(item, item.id, item.name); }, actions, 'primary', 'player-play');
+                    if (watchedMovie) {
+                        actionButton('Start from beginning', function () { streams(item, item.id, item.name, {startOver: true}); }, actions, '', 'rewind-backward-10');
+                        resumeLine.appendChild(node('span', formatTime(watchedMovie.seconds) + ' · ' + remaining(watchedMovie), 'resume-label')); progressBar(watchedMovie, resumeLine);
+                    }
+                    if (trailer) actionButton('Trailer', function () { playTrailer(trailer, item.name); }, actions);
+                    actionButton('Back', goBack, actions, 'secondary');
+                }
+                focusFirst(actions); status(isSeries ? 'Pick an episode or press Play.' : 'Press Play to choose a source.');
             }
+            paint(meta, false);
             var providers = addons.filter(function (a) { return C.supports(a, 'meta', meta.type, meta.id); }), i = 0;
             function next() {
                 if (epoch !== mine) return;
-                if (i >= providers.length) return content(meta);
+                if (i >= providers.length) return paint(meta, true);
                 request(C.resourceURL(providers[i++], 'meta', meta.type, meta.id), null, function (err, data) {
                     if (err || !data.meta) return next();
                     var full = {}, k; for (k in meta) if (Object.prototype.hasOwnProperty.call(meta, k) && k !== '__proto__') full[k] = meta[k];
                     for (k in data.meta) if (Object.prototype.hasOwnProperty.call(data.meta, k) && k !== '__proto__' && data.meta[k] !== null && data.meta[k] !== '') full[k] = data.meta[k];
-                    content(full);
+                    paint(full, true);
                 });
             }
             next();
         }
         if (currentPage) previous.push(currentPage); render();
     }
-    function streams(meta, id, title) {
+    function streams(meta, id, title, options) {
+        options = options || {};
+        var showAll = false;
         function render() {
             var mine = begin(title + ' — streams', render), list = node('div', null, 'list');
-            button('Back', goBack, view); view.appendChild(list);
+            button('Back', goBack, view);
+            if (options.startOver) message('Starts from the beginning.', false, view);
+            view.appendChild(list);
+            var maxGB = Number(read('maxStreamGB', 0)) || 0, maxHeight = Number(read('maxResolution', 0)) || 0, hidden = [];
             var providers = addons.filter(function (a) { return C.supports(a, 'stream', meta.type, id); }), pending = providers.length, total = 0, failures = 0;
             if (!pending) { status('No stream addons installed.'); return message('Sign in to import your Stremio addons, or add a manifest URL in Settings. Cinemeta supplies metadata, not video sources.'); }
             status('Finding streams…');
+            function addSource(stream, addon) {
+                var can = C.playable(stream), fit = C.compatibility(stream);
+                var b = button((stream.name || addon.manifest.name) + '\n' + (stream.description || stream.title || 'Video stream'), function () {
+                    if (!can.ok) return status(can.reason, true);
+                    play(stream, meta, id, title, !!options.startOver);
+                }, null);
+                var info = C.streamInfo(stream);
+                if (info.tags.length) b.appendChild(node('span', info.tags.join(' · '), 'stream-tags'));
+                if (fit.rank === 1 || fit.rank === 2) b.appendChild(node('span', (fit.rank === 2 ? 'Not recommended · ' : '') + fit.label, 'stream-warning'));
+                info.warnings.forEach(function (warning) { if (!/Dolby Vision/.test(warning)) b.appendChild(node('span', warning, 'stream-warning')); });
+                b.appendChild(node('small', can.ok ? (fit.rank === 0 ? 'Plays on this TV · Select to play' : 'Direct video · Select to play') : can.reason));
+                // Best-fitting sources first; addon order is kept within each rank.
+                b.setAttribute('data-rank', String(fit.rank));
+                var after = null; Array.prototype.some.call(list.children, function (other) { if (!other.hasAttribute('data-rank') || Number(other.getAttribute('data-rank')) > fit.rank) { after = other; return true; } return false; });
+                list.insertBefore(b, after);
+            }
+            function paintHidden() {
+                var old = view.querySelector('.hidden-sources'); if (old) old.parentNode.removeChild(old);
+                if (!hidden.length) return;
+                var box = node('div', null, 'hidden-sources'); view.appendChild(box);
+                var limits = [maxGB ? 'over ' + maxGB + ' GB' : '', maxHeight ? 'above ' + maxHeight + 'p' : ''].filter(Boolean).join(' or ');
+                message(hidden.length + (hidden.length === 1 ? ' source is' : ' sources are') + ' hidden by your source limits (' + limits + ').', false, box);
+                button('Show hidden sources', function () {
+                    showAll = true; var reveal = hidden; hidden = []; box.parentNode.removeChild(box);
+                    reveal.forEach(function (entry) { addSource(entry.stream, entry.addon); });
+                    status('Showing all ' + total + ' sources'); focusFirst(list);
+                }, box);
+            }
             providers.forEach(function (addon) {
                 request(C.resourceURL(addon, 'stream', meta.type, id), null, function (err, data) {
                     if (epoch !== mine) return;
                     if (err) failures++;
                     else (data.streams || []).forEach(function (stream) {
-                        total++; var can = C.playable(stream), fit = C.compatibility(stream); stream._slAddon = addon.transportUrl;
-                        var b = button((stream.name || addon.manifest.name) + '\n' + (stream.description || stream.title || 'Video stream'), function () {
-                            if (!can.ok) return status(can.reason, true);
-                            play(stream, meta, id, title);
-                        }, null);
-                        var info = C.streamInfo(stream);
-                        if (info.tags.length) b.appendChild(node('span', info.tags.join(' · '), 'stream-tags'));
-                        if (fit.rank === 1 || fit.rank === 2) b.appendChild(node('span', (fit.rank === 2 ? 'Not recommended · ' : '') + fit.label, 'stream-warning'));
-                        info.warnings.forEach(function (warning) { if (!/Dolby Vision/.test(warning)) b.appendChild(node('span', warning, 'stream-warning')); });
-                        b.appendChild(node('small', can.ok ? (fit.rank === 0 ? 'Plays on this TV · Select to play' : 'Direct video · Select to play') : can.reason));
-                        // Best-fitting sources first; addon order is kept within each rank.
-                        b.setAttribute('data-rank', String(fit.rank));
-                        var after = null; Array.prototype.some.call(list.children, function (other) { if (Number(other.getAttribute('data-rank')) > fit.rank) { after = other; return true; } return false; });
-                        list.insertBefore(b, after);
+                        total++; stream._slAddon = addon.transportUrl;
+                        if (!showAll && C.exceedsLimits(stream, maxGB, maxHeight)) hidden.push({stream: stream, addon: addon});
+                        else addSource(stream, addon);
                     });
                     if (--pending) return;
-                    status(total + ' sources · best for this TV first' + (failures ? ' · ' + failures + ' addons failed' : ''));
+                    status(total + ' sources · best for this TV first' + (hidden.length ? ' · ' + hidden.length + ' hidden by limits' : '') + (failures ? ' · ' + failures + ' addons failed' : ''));
                     if (!total) message('No streams returned by your installed addons.', false, list);
-                    focusFirst(list);
+                    paintHidden();
+                    focusFirst(list.children.length ? list : view);
                 });
             });
         }
@@ -761,6 +888,19 @@
             function paint() { entries.forEach(function (entry) { entry.button.setAttribute('aria-checked', String(entry.value === read(key, 'last'))); }); }
             paint();
         });
+        var sourceBox = node('section', null, 'panel'); addSection(sourceBox, 'sources', 'Source limits'); sourceBox.appendChild(node('h2', 'Source limits'));
+        message('For a slow connection: hide sources that are too large or too sharp to stream smoothly. Sources without size or quality information stay visible, and the source list can still show hidden ones.', false, sourceBox);
+        [['maxStreamGB', 'Maximum file size', [[0, 'No limit'], [2, '2 GB'], [5, '5 GB'], [10, '10 GB'], [20, '20 GB'], [40, '40 GB']]],
+         ['maxResolution', 'Maximum quality', [[0, 'No limit'], [1080, '1080p'], [720, '720p']]]].forEach(function (group) {
+            var box = node('div', null, 'buffer-choices language-choices'), entries = [];
+            sourceBox.appendChild(node('h3', group[1])); box.setAttribute('role', 'radiogroup'); box.setAttribute('aria-label', group[1]); sourceBox.appendChild(box);
+            group[2].forEach(function (entry) {
+                var b = button(entry[1], function () { save(group[0], entry[0]); paint(); status(group[1] + ': ' + entry[1]); }, box);
+                b.setAttribute('role', 'radio'); entries.push({value: entry[0], button: b});
+            });
+            function paint() { entries.forEach(function (entry) { entry.button.setAttribute('aria-checked', String(entry.value === (Number(read(group[0], 0)) || 0))); }); }
+            paint();
+        });
         var testBox = node('div', null, 'panel'); addSection(testBox, 'playback', 'Playback check'); testBox.appendChild(node('h2', 'Playback check'));
         testBox.appendChild(node('h3', 'Streaming buffer'));
         var bufferChoices = node('div', null, 'buffer-choices'); bufferChoices.id = 'buffer-mode';
@@ -850,7 +990,7 @@
         document.getElementById('time').textContent = formatTime(seconds) + ' / ' + formatTime(known ? duration : NaN);
         var preview = document.getElementById('seek-preview');
         preview.className = playback.scrub === null ? 'hidden' : '';
-        preview.textContent = formatTime(seconds) + ' · OK to seek';
+        preview.textContent = formatTime(seconds) + ' · Jumps here · Return cancels';
         preview.style.left = Math.max(8, Math.min(92, known ? seconds / duration * 100 : 0)) + '%';
         if (!playback.native && known) {
             try {
@@ -1052,7 +1192,10 @@
         providers.forEach(function (addon) {
             request(C.resourceURL(addon, 'stream', owner.meta.type, next.id), null, function (err, data) {
                 if (playback !== owner) return; owner.next.pending--;
-                if (!err) (data.streams || []).forEach(function (stream) { stream._slAddon = addon.transportUrl; if (C.playable(stream).ok) owner.next.streams.push(stream); });
+                if (!err) (data.streams || []).forEach(function (stream) {
+                    stream._slAddon = addon.transportUrl;
+                    if (C.playable(stream).ok && !C.exceedsLimits(stream, Number(read('maxStreamGB', 0)) || 0, Number(read('maxResolution', 0)) || 0)) owner.next.streams.push(stream);
+                });
             });
         });
         var box = document.getElementById('next-episode');
@@ -1100,7 +1243,7 @@
         playbackStatus('Preparing ' + nextEpisodeLabel(meta, video) + '…'); choose();
     }
     function stopPlayback() {
-        if (!playback) return; if (playback.trackChange) playback.trackChange.cancel(); if (playback.next) clearTimeout(playback.next.timer); document.getElementById('next-episode').className = 'hidden'; storeProgress(true); clearTimeout(playback.startTimer); clearTimeout(playback.seekTimer); clearInterval(playback.watchTimer); var wasNative = playback.native, returnFocus = playback.returnFocus, returnScroll = playback.returnScroll; playback = null; ++playbackEpoch; ++menuSerial;
+        if (!playback) return; clearTimeout(scrubTimer); if (playback.trackChange) playback.trackChange.cancel(); if (playback.next) clearTimeout(playback.next.timer); document.getElementById('next-episode').className = 'hidden'; storeProgress(true); clearTimeout(playback.startTimer); clearTimeout(playback.seekTimer); clearInterval(playback.watchTimer); var wasNative = playback.native, returnFocus = playback.returnFocus, returnScroll = playback.returnScroll; playback = null; ++playbackEpoch; ++menuSerial;
         if (barTimer) clearTimeout(barTimer); if (subtitleTimer) clearTimeout(subtitleTimer);
         if (wasNative) { try { nativePlayer().stop(); } catch (e) {} try { nativePlayer().close(); } catch (e) {} }
         var video = document.getElementById('video'); video.onended = video.onerror = video.onplaying = video.ontimeupdate = video.onloadedmetadata = video.onwaiting = video.onprogress = video.onseeked = null;
@@ -1129,7 +1272,7 @@
         target = Math.max(0, Math.min(playback.duration - 1, target));
         if (playback.trackChange) playback.trackChange.cancel();
         if (playback.nativeCue) { playback.nativeCue = null; document.getElementById('subtitle').textContent = ''; }
-        var mine = playbackEpoch, settled = false, seekFocus = document.activeElement; playback.seeking = true; playback.scrub = null; scrubCount = 0; paintTimeline();
+        clearTimeout(scrubTimer); var mine = playbackEpoch, settled = false, seekFocus = document.activeElement; playback.seeking = true; playback.scrub = null; scrubCount = 0; paintTimeline();
         playbackStatus('Seeking to ' + formatTime(target) + '…'); showBar();
         function finish() {
             if (settled || !playback || playback.failed || mine !== playbackEpoch) return false;
@@ -1162,8 +1305,12 @@
         var step = scrubCount > 16 ? 60 : scrubCount > 8 ? 30 : 10;
         playback.scrub = Math.max(0, Math.min(playback.duration - 1, (playback.scrub === null ? playback.seconds : playback.scrub) + delta * step));
         showBar(); paintTimeline(); document.getElementById('timeline').focus();
+        // Apply the previewed time once the viewer stops pressing Left / Right; OK applies it at once.
+        var owner = playback; clearTimeout(scrubTimer);
+        scrubTimer = setTimeout(function () { if (playback === owner && owner.scrub !== null) seekToSeconds(owner.scrub); }, 1500);
     }
-    function cancelScrub() { if (playback) { playback.scrub = null; scrubCount = 0; paintTimeline(); showBar(); } }
+    function commitScrub() { clearTimeout(scrubTimer); if (playback && playback.scrub !== null) seekToSeconds(playback.scrub); }
+    function cancelScrub() { clearTimeout(scrubTimer); if (playback) { playback.scrub = null; scrubCount = 0; paintTimeline(); showBar(); } }
     function closeTrackMenu(refocus) {
         if (playback && playback.trackChange) playback.trackChange.cancel();
         ++menuSerial; document.getElementById('track-menu').className = 'hidden'; document.getElementById('track-scrim').className = 'hidden';
@@ -1564,7 +1711,7 @@
             else if (code === 38) target = timeline.disabled ? back : timeline;
         } else if (active === timeline) {
             if (code === 38) target = back;
-            else if (code === 40) { cancelScrub(); target = remembered; }
+            else if (code === 40) { commitScrub(); target = remembered; }
         } else if (active === back) { if (code === 40) target = timeline.disabled ? remembered : timeline; }
         else target = code === 38 ? back : remembered;
         if (target) { target.focus(); if (choices.indexOf(target) >= 0) playback.controlFocus = target.id; }
@@ -1685,7 +1832,7 @@
             if (!menuOpen && !playback.failed) {
                 if (chromeHidden && code === 13) { e.preventDefault(); document.getElementById(playback.controlFocus || 'pause').focus(); return; }
                 if ((code === 37 || code === 39) && (onTimeline || chromeHidden)) { e.preventDefault(); scrub(code === 37 ? -1 : 1); return; }
-                if (onTimeline && code === 13) { e.preventDefault(); if (playback.scrub !== null) seekToSeconds(playback.scrub); else togglePause(); return; }
+                if (onTimeline && code === 13) { e.preventDefault(); if (playback.scrub !== null) commitScrub(); else togglePause(); return; }
                 if (chromeHidden && code === 40) { e.preventDefault(); document.getElementById(playback.controlFocus || 'pause').focus(); return; }
             }
             if (code >= 37 && code <= 40 && !(tag === 'INPUT' && document.activeElement !== timeline && (code === 37 || code === 39))) {

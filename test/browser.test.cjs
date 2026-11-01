@@ -67,7 +67,7 @@ async function run(browser, existingServer) {
         assert(calls.some(x=>x.url.endsWith('/addonCollectionGet')&&x.body.authKey==='synthetic-test-token'));
         await page.getByRole('button',{name:'Library',exact:true}).click();
         await page.getByRole('button',{name:'Fixture Movie'}).first().click();
-        await page.getByRole('button',{name:'Find streams'}).click();
+        await page.getByRole('button',{name:'Play',exact:true}).click();
         await page.getByRole('button',{name:/Torrent fixture/}).click();
         assert.match(await page.locator('#status').textContent(),/Torrent source/);
         await page.getByRole('button',{name:/HTTP fixture/}).click();
